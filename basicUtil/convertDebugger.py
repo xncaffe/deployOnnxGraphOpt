@@ -34,8 +34,7 @@ class OnnxDebuggerMeet(object):
                 arg_new = (onnx_model, )
                 onnx_model, restart = func(*arg_new, **kwargs)
                 if restart:
-                    logger.info("InputOutput optimization completed --> "+func.__name__)
-                    break 
+                    logger.info("InputOutput optimization completed --> "+func.__name__) 
             return onnx_model            
         
         return loop_run_func 

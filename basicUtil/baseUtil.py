@@ -79,6 +79,18 @@ def find_init_by_name(onnx_model, name):
             return True
     return False
 
+def delete_useless_value_info(onnx_model):
+    value_infosCp = copy.deepcopy(onnx_model.graph.value_info)
+    for value_info in value_infosCp:
+        delFlag = True
+        for node in onnx_model.graph.node:
+            if value_info.name in node.input:
+                delFlag = False
+                break
+        if delFlag:
+            onnx_model.graph.value_info.remove(value_info)
+    return onnx_model
+
 def delete_useless_input_in_initializer(onnx_model):
     ini_to_keep_list = []
     init_need_remove = []
@@ -163,7 +175,12 @@ def get_shape_by_name(onnx_model, name):
         return dim_list
     except:
         return [1]
-                
+
+def get_node_id(onnx_model, n_node):
+    for id, node in enumerate(onnx_model.graph.node):
+        if node.name == n_node.name:
+            return id
+              
 def get_node_by_output(onnx_model, name: str):
     for node in onnx_model.graph.node:
         if name in node.output:

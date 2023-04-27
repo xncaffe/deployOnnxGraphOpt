@@ -27,12 +27,7 @@ def main(args):
     onnx_model = onnx.load_model(srcPath)
     if dstOptSetVer and onnx_model.opset_import[0].version != dstOptSetVer:
         onnx_model = onnx.version_converter.convert_version(onnx_model, dstOptSetVer)
-    logger.info("Start convert dynamic batch ...")
-    onnx_model = convert_dtnamic_batch(onnx_model)
-    logger.info("Convert dynamic batch finish.")
-    logger.info("Start simplifier before graph optimization ...")
-    onnx_model, check = simplify(onnx_model)
-    logger.info("Finish simplifier before graph optimization")
+    onnx_model = model_preprocess(onnx_model)
 
     '''
     Explanation run opt
