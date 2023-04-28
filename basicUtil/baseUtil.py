@@ -42,6 +42,27 @@ NPDTYPE_2_ONNXDTYPE = {
     np.dtype(np.uint): TensorProto.UINT64,      #index = 13
 }
 
+def delete_initializer_by_name(onnx_model, name):
+    initialCp = copy.deepcopy(onnx_model.graph.initializer)
+    for init in initialCp:
+        if init.name == name:
+            onnx_model.graph.initializer.remove(init)
+    return onnx_model
+
+def find_other_node_by_input(onnx_model, n_node, input):
+    for node in onnx_model.graph.node:
+        if input in node.input and node.name != n_node.name:
+            return True
+    return False  
+
+def find_input_from_initializer(onnx_model, n_node):
+    reInputs = {}
+    for in_id, input in enumerate(n_node.input):
+        for initial in onnx_model.graph.initializer:
+            if input == initial.name:
+                reInputs[input] = in_id
+    return reInputs          
+
 def delete_useless_inputOfModel(onnx_model):
     onnx_modelCp = copy.deepcopy(onnx_model)
     for input in onnx_modelCp.graph.input:

@@ -116,3 +116,87 @@ def opt_fusionSeparatedLayerNormal(onnx_model, node, node_index):
         onnx_model = delete_useless_input_in_initializer(onnx_model)
         return onnx_model, True
     return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_replaceDivByMul(onnx_model, node, node_index):
+    if check_node_serial_group(onnx_model, node, ["Div"]):
+        divNode = get_node_serial_group(onnx_model, node, ["Div"])[0]
+        fixInput = divNode.input[1] if find_init_by_name(onnx_model, divNode.input[1]) else divNode.input[0]
+        if fixInput != divNode.input[1] or not find_init_by_name(onnx_model, fixInput):
+            return onnx_model, False
+        fixInputValue = get_tensor_from_initializer(onnx_model, fixInput)
+        fixInputValue = 1.0 / fixInputValue
+        newInitial = onnx.helper.make_tensor(name=fixInput,
+                                             data_type=NPDTYPE_2_ONNXDTYPE[fixInputValue.dtype],
+                                             dims=fixInputValue.shape,
+                                             vals=fixInputValue.reshape(-1).tolist())
+        if not find_other_node_by_input(onnx_model, divNode, fixInput):
+            onnx_model = delete_initializer_by_name(onnx_model, fixInput)
+        else:
+            newInitial.name += "_{}ToMul_init".format(divNode.name)
+        onnx_model.append(newInitial)
+        newMulNode = onnx.helper.make_node(name=divNode.name+"ToMul",
+                                           op_type="Mul",
+                                           inputs=[divNode.input[0], newInitial.name],
+                                           outputs=divNode.output)
+        onnx_model.graph.node.remove(divNode)
+        onnx_model.graph.node.insert(node_index, newMulNode)
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionMultiMulDiv(onnx_model, node, node_index):
+    def find_nodes_list_static_muldiv(onnx_model, node, node_index):
+        if check_node_serial_group(onnx_model, node, ["Div"]) or check_node_serial_group(onnx_model, node, ["Mul"]):
+            re_nodes_list = []
+            effectNode = get_node_serial_group(onnx_model, node, ["Div"])
+            if not effectNode:
+                effectNode = get_node_serial_group(onnx_model, node, ["Mul"])
+            effectNode = effectNode[0] 
+            staticInput, dynamicInput = (effectNode.input[1], effectNode.input[0]) \
+                if find_init_by_name(onnx_model, effectNode.input[1]) else (effectNode.input[0], effectNode.input[1])
+            if (not find_init_by_name(onnx_model, staticInput)) or (effectNode.op_type=="Div" and staticInput != effectNode.input[1]):
+                return []
+            re_nodes_list.append(effectNode)
+            staticValueArr = get_tensor_from_initializer(onnx_model, staticInput)
+            newStaticValueArr = 1.0 / staticValueArr if effectNode.op_type == "Div" else staticValueArr
+            while True:
+                currentNode = get_node_by_output(onnx_model, dynamicInput)
+                if currentNode is None or currentNode.op_type not in ["Div", "Mul"]:
+                    break
+                staticInput, dynamicInput = (currentNode.input[1], currentNode.input[0]) \
+                    if find_init_by_name(onnx_model, currentNode.input[1]) else (currentNode.input[0], currentNode.input[1])
+                if (not find_init_by_name(onnx_model, staticInput)) or (currentNode.op_type == "Div" and staticInput != currentNode.input[1]):
+                    break
+                initValueArr = get_tensor_from_initializer(onnx_model, staticInput)
+                newStaticValueArr = newStaticValueArr*(1.0/initValueArr) if currentNode.op_type == "Div" else newStaticValueArr*initValueArr
+                re_nodes_list.append(currentNode)
+            if len(re_nodes_list) == 1 and re_nodes_list[0].op_type == "Mul":
+                return []
+            newStaticValueArr = newStaticValueArr.astype(np.float32)
+            return [re_nodes_list, staticInput, dynamicInput, newStaticValueArr]
+        return []
+    
+    validInfos = find_nodes_list_static_muldiv(onnx_model, node, node_index)
+    if not validInfos:
+        return onnx_model, False
+    newInitTensorName = validInfos[1]+"_{}_newTensor".format(validInfos[0][-1].name) \
+        if find_other_node_by_input(onnx_model, validInfos[0][-1], validInfos[1]) else validInfos[1]
+    newInitTensor = onnx.helper.make_tensor(name=newInitTensorName,
+                                            data_type=NPDTYPE_2_ONNXDTYPE[validInfos[-1].dtype],
+                                            dims=validInfos[-1].shape,
+                                            vals=validInfos[-1].flatten().tolist())
+    if newInitTensorName == validInfos[1]:
+        onnx_model = delete_initializer_by_name(onnx_model, validInfos[1])
+    newMulNode = onnx.helper.make_node(name=validInfos[0][-1].name+"_fusionMul",
+                                       op_type="Mul",
+                                       inputs=[validInfos[2], newInitTensor.name],
+                                       outputs=validInfos[0][0].output)
+    onnx_model.graph.initializer.append(newInitTensor)
+    onnx_model.graph.node.insert(node_index, newMulNode)
+    onnx_model = delete_nodes(onnx_model, validInfos[0])
+    onnx_model = delete_useless_input_in_initializer(onnx_model)
+    
+    return onnx_model, True
+        
