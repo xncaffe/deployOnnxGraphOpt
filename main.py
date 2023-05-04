@@ -11,7 +11,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--input_model", type=str, default="/workspace/nxu/project/Transformer/annotated-transformer/annatatedTransformer-multi30k.onnx", help="input onnx model path")
     parser.add_argument("-o", "--output_model", type=str, default="/workspace/nxu/project/Transformer/annotated-transformer/annatatedTransformer-multi30k-opt.onnx", help="output onnx model path")
-    parser.add_argument("-v", "--convert_opset", type=int, default=17, help="whether to convert opset version")
+    parser.add_argument("-v", "--convert_opset", type=int, default=11, help="whether to convert opset version")
     args = parser.parse_args()
     return args
 

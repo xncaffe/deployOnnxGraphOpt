@@ -74,5 +74,6 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_replaceDivByMul(self.onnx_model)
         if self.onnx_model.opset_import[0].version < 17:
             self.onnx_model = opt_fusionSeparatedLayerNormal(self.onnx_model)
+        self.onnx_model = opt_fusionMultiSubReduceMean(self.onnx_model)
         return self.onnx_model         
         

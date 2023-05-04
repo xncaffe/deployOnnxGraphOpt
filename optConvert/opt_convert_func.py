@@ -199,4 +199,77 @@ def opt_fusionMultiMulDiv(onnx_model, node, node_index):
     onnx_model = delete_useless_input_in_initializer(onnx_model)
     
     return onnx_model, True
-        
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionMultiSubReduceMean(onnx_model, node, node_index):
+    def split_reduceMean_sub_node(nodes_list):
+        reduceMean_nodes = []
+        sub_nodes = []
+        for x_node in nodes_list:
+            if x_node.op_type == "ReduceMean":
+                reduceMean_nodes.append(x_node)
+            elif x_node.op_type == "Sub":
+                sub_nodes.append(x_node)
+        return reduceMean_nodes, sub_nodes
+    
+    def match_reduceMean_sub_node(reduceMeanNodes, subNodes):
+        matchDicts = {}
+        for sub_node in subNodes:
+            for reduceMean_node in reduceMeanNodes:
+                if reduceMean_node.output[0] in sub_node.input and reduceMean_node.input[0] in sub_node.input:
+                    matchDicts[sub_node.name]=[sub_node, reduceMean_node]
+        return matchDicts
+    
+    if node.op_type != "Sub" or \
+        find_init_by_name(onnx_model, node.input[0]) or find_init_by_name(onnx_model, node.input[1]):
+            return onnx_model, False
+    leftInputNode = get_node_by_output(onnx_model, node.input[0])
+    rightInputNode = get_node_by_output(onnx_model, node.input[1])
+    if leftInputNode.op_type != "ReduceMean" and rightInputNode.op_type != "ReduceMean":
+        return onnx_model, False
+    reduceMeanNode, preNode = (rightInputNode, leftInputNode) \
+        if rightInputNode.op_type == "ReduceMean" else (leftInputNode, rightInputNode)       
+    if reduceMeanNode.input[0] not in node.input:
+        return onnx_model, False
+    parallNodes = get_node_by_input(onnx_model, [preNode.output[0]])
+    if len(parallNodes) < 3:
+        return onnx_model, False
+    parallNodes.remove(reduceMeanNode)
+    parallNodes.remove(node)
+    reduceMeanNodeAttrDict = attribute_to_dict(reduceMeanNode.attribute)
+    reduceMeanNodeAxes = reduceMeanNodeAttrDict.get("axes", 1)
+    reduceMeanNodeAxes = reduceMeanNodeAxes[0] if isinstance(reduceMeanNodeAxes, list) else reduceMeanNodeAxes
+    reduceMeanNodeInputShape = get_shape_by_name(onnx_model, reduceMeanNode.input[0])
+    reduceMeanNodeAxes = reduceMeanNodeAxes if reduceMeanNodeAxes >= 0 else len(reduceMeanNodeInputShape)+reduceMeanNodeAxes
+    reduceMeanNodeKeepdims = reduceMeanNodeAttrDict.get("keepdims", 1)
+    
+    otherReduceMeanNodes, otherSubNodes = split_reduceMean_sub_node(parallNodes)
+    matchDict = match_reduceMean_sub_node(otherReduceMeanNodes, otherSubNodes)
+    delNodes_list = []
+    for subNodeName in matchDict:
+        otherSubNode, otherReduceMeanNode = matchDict[subNodeName][0], matchDict[subNodeName][1]
+        if reduceMeanNode.input[0] != otherReduceMeanNode.input[0] or reduceMeanNode.input[0] not in otherSubNode.input:
+            continue
+        if list(otherSubNode.input).index(reduceMeanNode.input[0]) != list(node.input).index(reduceMeanNode.input[0]):
+            continue
+        otherReduceMeanNodeAttrDict = attribute_to_dict(otherReduceMeanNode.attribute)
+        if reduceMeanNodeKeepdims != otherReduceMeanNodeAttrDict.get("keepdims", 1):
+            continue
+        otherReduceMeanNodeAxes = otherReduceMeanNodeAttrDict.get("axes", 1)
+        otherReduceMeanNodeAxes = otherReduceMeanNodeAxes[0] if isinstance(otherReduceMeanNodeAxes, list) else otherReduceMeanNodeAxes
+        otherReduceMeanNodeAxes = otherReduceMeanNodeAxes if otherReduceMeanNodeAxes >= 0 else len(reduceMeanNodeInputShape)+otherReduceMeanNodeAxes
+        if otherReduceMeanNodeAxes != reduceMeanNodeAxes:
+            continue
+        otherSubOutNodes = get_node_by_input(onnx_model, otherSubNode.output)
+        for otherSubOutNode in otherSubOutNodes:
+            otherSubOutNode.input[list(otherSubOutNode.input).index(otherSubNode.output[0])] = node.output[0]
+        if otherSubNode not in delNodes_list:
+            delNodes_list.append(otherSubNode)
+        if otherReduceMeanNode not in delNodes_list:
+            delNodes_list.append(otherReduceMeanNode)
+    if not delNodes_list:
+        return onnx_model, False
+    onnx_model = delete_nodes(onnx_model, delNodes_list)
+    onnx_model = delete_useless_input_in_initializer(onnx_model)
+    
+    return onnx_model, True
