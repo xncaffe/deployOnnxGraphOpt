@@ -100,6 +100,13 @@ def find_init_by_name(onnx_model, name):
             return True
     return False
 
+def delete_value_info_by_name(onnx_model, name):
+    for value_info in onnx_model.graph.value_info:
+        if value_info.name == name:
+            onnx_model.graph.value_info.remove(value_info)
+            return onnx_model
+    return onnx_model
+
 def delete_useless_value_info(onnx_model):
     value_infosCp = copy.deepcopy(onnx_model.graph.value_info)
     for value_info in value_infosCp:

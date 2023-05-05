@@ -13,6 +13,7 @@ from basicUtil.baseUtil import *
 from basicUtil.convertDebugger import *
 from optConvert.opt_convert_func import *
 from optConvert.onnxInOutOpt import *
+from optConvert.opt_about_transformer_func import *
 
 def convert_dtnamic_batch(onnx_model):
     graph_input = onnx_model.graph.input
@@ -75,5 +76,6 @@ class OnnxConvertOptimizer(object):
         if self.onnx_model.opset_import[0].version < 17:
             self.onnx_model = opt_fusionSeparatedLayerNormal(self.onnx_model)
         self.onnx_model = opt_fusionMultiSubReduceMean(self.onnx_model)
+        self.onnx_model = opt_convert3dimMultiAttentionKQVTo4dim(self.onnx_model)
         return self.onnx_model         
         

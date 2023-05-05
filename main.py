@@ -37,7 +37,7 @@ def main(args):
     logger.info("Start run opt ... ")
     onnx_model = clsOpt.opt()
     logger.info("Opt finish!")
-
+    
     '''
     PostProcess
     '''
