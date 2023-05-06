@@ -1,5 +1,7 @@
 from functools import wraps
 
+from basicUtil.inference_onnx import *
+
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("[OPTPROC]")
@@ -18,7 +20,9 @@ class OnnxDebuggerMeet(object):
                     onnx_model, restart = func(*arg_new, **kwargs)
                     if restart:
                         logger.info("Graph optimization completed --> "+func.__name__+ ", node_name: " + node.name)
-                        break 
+                        break
+            if not restart:
+                onnx_model = infer_model_shape(onnx_model)
             return onnx_model            
         
         return loop_run_func 

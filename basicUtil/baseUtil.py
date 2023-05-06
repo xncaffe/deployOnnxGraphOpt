@@ -6,40 +6,68 @@ import numpy as np
 from onnx import TensorProto
 
 NPDTYPE_2_ONNXDTYPE = {
-    'float32': TensorProto.FLOAT,   #index = 1
-    'uint8': TensorProto.UINT8,     #index = 2
-    'int8': TensorProto.INT8,       #index = 3
-    'uint16': TensorProto.UINT16,   #index = 4
-    'int16': TensorProto.INT16,     #index = 5
-    'int32': TensorProto.INT32,     #index = 6
-    'int64': TensorProto.INT64,     #index = 7
-    'object': TensorProto.STRING,   #index = 8
-    '<U0': TensorProto.STRING,      #index = 8
-    'bool': TensorProto.BOOL,       #index = 9
-    'float16': TensorProto.FLOAT16, #index = 10
-    'float64': TensorProto.DOUBLE,  #index = 11
-    'uint32': TensorProto.UINT32,   #index = 12
-    'uint64': TensorProto.UINT64,   #index = 13
-    np.dtype(np.float32): TensorProto.FLOAT,    #index = 1
-    np.dtype(np.uint8): TensorProto.UINT8,      #index = 2
-    np.dtype(np.int8): TensorProto.INT8,        #index = 3
-    np.dtype(np.uint16): TensorProto.UINT16,    #index = 4
-    np.dtype(np.ushort): TensorProto.UINT16,    #index = 4
-    np.dtype(np.short): TensorProto.INT16,      #index = 5
-    np.dtype(np.int16): TensorProto.INT16,      #index = 5
-    np.dtype(np.int32): TensorProto.INT32,      #index = 6
-    np.dtype(np.int64): TensorProto.INT64,      #index = 7
-    #np.dtype(np.int): TensorProto.INT64,        #index = 7
-    np.dtype(np.str_): TensorProto.STRING,       #index = 8
-    #np.dtype(np.bool): TensorProto.BOOL,        #index = 9
-    np.dtype(np.bool_): TensorProto.BOOL,       #index = 9
-    np.dtype(np.bool8): TensorProto.BOOL,       #index = 9
-    np.dtype(np.float16): TensorProto.FLOAT16,  #index = 10
-    #np.dtype(np.float): TensorProto.DOUBLE,     #index = 11
-    np.dtype(np.float64): TensorProto.DOUBLE,   #index = 11
-    np.dtype(np.uint32): TensorProto.UINT32,    #index = 12
-    np.dtype(np.uint64): TensorProto.UINT64,    #index = 13
-    np.dtype(np.uint): TensorProto.UINT64,      #index = 13
+    'float32':  TensorProto.FLOAT,      #index = 1
+    'uint8':    TensorProto.UINT8,      #index = 2
+    'int8':     TensorProto.INT8,       #index = 3
+    'uint16':   TensorProto.UINT16,     #index = 4
+    'int16':    TensorProto.INT16,      #index = 5
+    'int32':    TensorProto.INT32,      #index = 6
+    'int64':    TensorProto.INT64,      #index = 7
+    'object':   TensorProto.STRING,     #index = 8
+    '<U0':      TensorProto.STRING,     #index = 8
+    'bool':     TensorProto.BOOL,       #index = 9
+    'float16':  TensorProto.FLOAT16,    #index = 10
+    'float64':  TensorProto.DOUBLE,     #index = 11
+    'uint32':   TensorProto.UINT32,     #index = 12
+    'uint64':   TensorProto.UINT64,     #index = 13
+    np.dtype(np.float32):   TensorProto.FLOAT,      #index = 1
+    np.dtype(np.uint8):     TensorProto.UINT8,      #index = 2
+    np.dtype(np.int8):      TensorProto.INT8,       #index = 3
+    np.dtype(np.uint16):    TensorProto.UINT16,     #index = 4
+    np.dtype(np.ushort):    TensorProto.UINT16,     #index = 4
+    np.dtype(np.short):     TensorProto.INT16,      #index = 5
+    np.dtype(np.int16):     TensorProto.INT16,      #index = 5
+    np.dtype(np.int32):     TensorProto.INT32,      #index = 6
+    np.dtype(np.int64):     TensorProto.INT64,      #index = 7
+    #np.dtype(np.int):      TensorProto.INT64,      #index = 7
+    np.dtype(np.str_):      TensorProto.STRING,     #index = 8
+    #np.dtype(np.bool):     TensorProto.BOOL,       #index = 9
+    np.dtype(np.bool_):     TensorProto.BOOL,       #index = 9
+    np.dtype(np.bool8):     TensorProto.BOOL,       #index = 9
+    np.dtype(np.float16):   TensorProto.FLOAT16,    #index = 10
+    #np.dtype(np.float):    TensorProto.DOUBLE,     #index = 11
+    np.dtype(np.float64):   TensorProto.DOUBLE,     #index = 11
+    np.dtype(np.uint32):    TensorProto.UINT32,     #index = 12
+    np.dtype(np.uint64):    TensorProto.UINT64,     #index = 13
+    np.dtype(np.uint):      TensorProto.UINT64,     #index = 13
+}
+
+ONNXDTYPE_2_NPDTYPE = {
+    TensorProto.FLOAT:  np.dtype(np.float32),
+    TensorProto.UINT8:  np.dtype(np.uint8),
+    TensorProto.INT16:  np.dtype(np.int8),
+    TensorProto.UINT16: np.dtype(np.uint16),
+    TensorProto.UINT32: np.dtype(np.uint32),
+    TensorProto.INT32:  np.dtype(np.int32),
+    TensorProto.INT64:  np.dtype(np.int64),
+    TensorProto.UINT64: np.dtype(np.uint64),
+    TensorProto.DOUBLE: np.dtype(np.float64),
+}
+
+ONNXDTYPE = {
+    1:  TensorProto.FLOAT,      #index = 1
+    2:  TensorProto.UINT8,      #index = 2
+    3:  TensorProto.INT8,       #index = 3
+    4:  TensorProto.UINT16,     #index = 4
+    5:  TensorProto.INT16,      #index = 5
+    6:  TensorProto.INT32,      #index = 6
+    7:  TensorProto.INT64,      #index = 7
+    8:  TensorProto.STRING,     #index = 8
+    9:  TensorProto.BOOL,       #index = 9
+    10: TensorProto.FLOAT16,    #index = 10
+    11: TensorProto.DOUBLE,     #index = 11
+    12: TensorProto.UINT32,     #index = 12
+    13: TensorProto.UINT64,     #index = 13
 }
 
 def delete_initializer_by_name(onnx_model, name):
@@ -53,7 +81,19 @@ def find_other_node_by_input(onnx_model, n_node, input):
     for node in onnx_model.graph.node:
         if input in node.input and node.name != n_node.name:
             return True
-    return False  
+    return False
+
+def get_value_info_by_name(onnx_model, name):
+    for x in onnx_model.graph.input:
+        if x.name == name:
+            return x
+    for x in onnx_model.graph.output:
+        if x.name == name:
+            return x
+    for x in onnx_model.graph.value_info:
+        if x.name == name:
+            return x
+    return None
 
 def find_input_from_initializer(onnx_model, n_node):
     reInputs = {}
@@ -93,6 +133,11 @@ def get_dtype_by_name(onnx_model, name):
             return value.data_type
     
     return None
+
+def insert_node_by_list(onnx_model, nodes_list, index):
+    for node in nodes_list:
+        onnx_model.graph.node.insert(index, node)
+    return onnx_model  
 
 def find_init_by_name(onnx_model, name):
     for init in onnx_model.graph.initializer:

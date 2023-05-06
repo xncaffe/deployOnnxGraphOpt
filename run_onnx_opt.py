@@ -71,11 +71,12 @@ class OnnxConvertOptimizer(object):
     def opt(self):
         self.onnx_model = opt_deleteGatherInput(self.onnx_model)
         self.onnx_model = opt_mulReplaceWhereBoolInput(self.onnx_model)
+        if self.onnx_model.opset_import[0].version >= 17:
+            self.onnx_model = opt_fusionSeparatedLayerNormal(self.onnx_model)
         self.onnx_model = opt_fusionMultiMulDiv(self.onnx_model)
         self.onnx_model = opt_replaceDivByMul(self.onnx_model)
-        if self.onnx_model.opset_import[0].version < 17:
-            self.onnx_model = opt_fusionSeparatedLayerNormal(self.onnx_model)
         self.onnx_model = opt_fusionMultiSubReduceMean(self.onnx_model)
         self.onnx_model = opt_convert3dimMultiAttentionKQVTo4dim(self.onnx_model)
+        self.onnx_model = opt_splitMatMulQK2DynamicConv(self.onnx_model)
         return self.onnx_model         
         
