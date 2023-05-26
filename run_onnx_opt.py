@@ -78,5 +78,18 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_fusionMultiSubReduceMean(self.onnx_model)
         self.onnx_model = opt_convert3dimMultiAttentionKQVTo4dim(self.onnx_model)
         self.onnx_model = opt_splitMatMulQK2DynamicConv(self.onnx_model)
+        self.onnx_model = opt_splitVxSoftmax2DynamicConv(self.onnx_model)
+        self.onnx_model = opt_3dimMultiAttentionxWto4dimConv(self.onnx_model)
+        self.onnx_model = opt_fusionTransposeTranspose(self.onnx_model)
+        self.onnx_model = opt_fusionMultiBranchReshapeTranspose(self.onnx_model)
+        self.onnx_model = opt_3dimResidualAddTo4dim(self.onnx_model)
+        self.onnx_model = opt_3dimFeedForwardTo4dim(self.onnx_model)
+        self.onnx_model = opt_transposeReshape3dimAddTo4dimAdd(self.onnx_model)
+        self.onnx_model = opt_3dimLayerNormalTo4dim(self.onnx_model)
+        self.onnx_model = opt_fusionMaskMulTranspose(self.onnx_model)
+        self.onnx_model = opt_moveForwardInputReshapeTranspose(self.onnx_model)
+        self.onnx_model = opt_fusionInputTranspose(self.onnx_model)
+        self.onnx_model = opt_fusionTransposeReshapeReshapeTranspose(self.onnx_model)
+        self.onnx_model = opt_3dimInputReshapeTo4dim(self.onnx_model)
         return self.onnx_model         
         

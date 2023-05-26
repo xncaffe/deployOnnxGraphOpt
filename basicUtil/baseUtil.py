@@ -5,6 +5,9 @@ import onnx.helper
 import numpy as np
 from onnx import TensorProto
 
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 NPDTYPE_2_ONNXDTYPE = {
     'float32':  TensorProto.FLOAT,      #index = 1
     'uint8':    TensorProto.UINT8,      #index = 2
@@ -144,6 +147,39 @@ def find_init_by_name(onnx_model, name):
         if init.name == name:
             return True
     return False
+
+def find_node_by_name(onnx_model, name):
+    for node in onnx_model.graph.node:
+        if node.name == name:
+            return True
+    return False
+
+def find_tensor_by_name(onnx_model, name):
+    for init in onnx_model.graph.initializer:
+        if init.name == name:
+            return True
+    for output in onnx_model.graph.output:
+        if output.name == name:
+            return True
+    for input in onnx_model.graph.input:
+        if input.name == name:
+            return True
+    for node in onnx_model.graph.node:
+        if name in node.output:
+            return True
+    return False
+
+def get_unique_node_tensor_name(onnx_model, start_name):
+    start_state = True
+    id = 0
+    re_name = start_name
+    while start_state:
+        if find_node_by_name(onnx_model, re_name) or find_tensor_by_name(onnx_model, re_name):
+            re_name = start_name+"_%d"%id
+            id += 1
+        else:
+            start_state = False
+    return re_name
 
 def delete_value_info_by_name(onnx_model, name):
     for value_info in onnx_model.graph.value_info:

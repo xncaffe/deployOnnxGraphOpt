@@ -273,3 +273,119 @@ def opt_fusionMultiSubReduceMean(onnx_model, node, node_index):
     onnx_model = delete_useless_input_in_initializer(onnx_model)
     
     return onnx_model, True
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionTransposeTranspose(onnx_model, node, node_index):
+    if check_node_serial_group(onnx_model, node, ["Transpose"]):
+        transposeNode = get_node_serial_group(onnx_model, node, ["Transpose"])[0]
+        nextNodesList = get_node_by_input(onnx_model, transposeNode.output)
+        if not nextNodesList:
+            return onnx_model, False
+        nextTransposeNodesList = [nextNode for nextNode in nextNodesList if nextNode.op_type == "Transpose"]
+        if not nextTransposeNodesList:
+            return onnx_model, False
+        netOutputNames = [netOutput.name for netOutput in onnx_model.graph.output]
+        transposeInShape = get_shape_by_name(onnx_model, transposeNode.input[0])
+        transposeAttrDict = attribute_to_dict(transposeNode.attribute)
+        transposePerm = transposeAttrDict.get("perm", list(range(len(transposeInShape))).reverse())
+        for nextTransposeNode in nextTransposeNodesList:
+            nextTransposeAttrDict = attribute_to_dict(nextTransposeNode.attribute)
+            nextTransposePerm = nextTransposeAttrDict.get("perm", list(range(len(transposeInShape))).reverse())
+            newFusionPerm = [transposePerm[permId] for permId in nextTransposePerm]
+            if newFusionPerm == list(range(len(transposeInShape))):
+                secondNodesList = get_node_by_input(onnx_model, nextTransposeNode.output)
+                if nextTransposeNode.output[0] in netOutputNames:
+                    del onnx_model.graph.output[netOutputNames.index(nextTransposeNode.output[0])]
+                    onnx_model.graph.output.extend(get_value_info_by_name(onnx_model, transposeNode.input[0]))
+                for secondNode in secondNodesList:
+                    secondNode.input[list(secondNode.input).index(nextTransposeNode.output[0])] = transposeNode.input[0]
+                onnx_model.graph.node.remove(nextTransposeNode)
+            else:
+                nextTransposeNode.input[0] = transposeNode.input[0]
+                del nextTransposeNode.attribute[:]
+                newFusionPermAttribute = onnx.helper.make_attribute("perm", newFusionPerm)
+                nextTransposeNode.attribute.append(newFusionPermAttribute)
+        if len(get_node_by_input(onnx_model, transposeNode.output)) == 0:
+            del onnx_model.graph.node[node_index]
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        onnx_model = delete_useless_value_info(onnx_model)
+        return onnx_model, True
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionMultiBranchReshapeTranspose(onnx_model, node, node_index):
+    if check_node_serial_group(onnx_model, node, ["Reshape", "Transpose"]):
+        reshapeNode, transposeNode = get_node_serial_group(onnx_model, node, ["Reshape", "Transpose"])
+        blkOutNodesList = get_node_by_input(onnx_model, [reshapeNode.input[0]])
+        if not blkOutNodesList:
+            return onnx_model, False
+        reshapeOutShape = get_shape_by_name(onnx_model, reshapeNode.output[0])
+        transposeAttributeDict = attribute_to_dict(transposeNode.attribute)
+        transposePerm = transposeAttributeDict.get("perm", list(range(len(reshapeOutShape))).reverse())
+        delNodesList = []
+        for blkOutNode in blkOutNodesList:
+            if blkOutNode.name == reshapeNode.name or blkOutNode.op_type != "Reshape":
+                continue
+            otherReshapeNode = blkOutNode
+            otherReshapeOutShape = get_shape_by_name(onnx_model, otherReshapeNode.output[0])
+            if otherReshapeOutShape != reshapeOutShape:
+                continue
+            otherNextNodesList = get_node_by_input(onnx_model, otherReshapeNode.output)
+            otherTransposeNodesList = [otherNode for otherNode in otherNextNodesList if otherNode.op_type == "Transpose"]
+            meetOtherTransposeNodesList = []
+            for otherTransposeNode in otherTransposeNodesList:
+                otherTransposePerm = attribute_to_dict(otherTransposeNode.attribute).get("perm", list(range(len(reshapeOutShape))).reverse())
+                if otherTransposePerm != transposePerm:
+                    continue
+                delNodesList.append(otherTransposeNode)
+                meetOtherTransposeNodesList.append(otherTransposeNode)
+                otherTranposeOutNodesList = get_node_by_input(onnx_model, otherTransposeNode.output)
+                for otherTransposeOutNode in otherTranposeOutNodesList:
+                    otherTransposeOutNode.input[list(otherTransposeOutNode.input).index(otherTransposeNode.output[0])] = transposeNode.output[0]
+            if len(meetOtherTransposeNodesList) == len(otherTransposeNodesList) and len(otherTransposeNodesList) == len(otherNextNodesList):
+                delNodesList.append(otherReshapeNode)
+        onnx_model = delete_nodes(onnx_model, delNodesList)
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        onnx_model = delete_useless_value_info(onnx_model)
+        if not delNodesList:
+            return onnx_model, False
+        return onnx_model, True
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionTransposeReshapeReshapeTranspose(onnx_model, node, node_index):
+    if check_node_serial_group(onnx_model, node, ['Transpose', 'Reshape', 'Reshape', 'Transpose']):
+        serialNodesList = get_node_serial_group(onnx_model, node, ['Transpose', 'Reshape', 'Reshape', 'Transpose'])
+        topTPNode, topRSNode, botRSNode, botTPNode = serialNodesList
+        topRSInShape = get_shape_by_name(onnx_model, topRSNode.input[0])
+        botRSOutShape = get_shape_by_name(onnx_model, botRSNode.output[0])
+        if topRSInShape != botRSOutShape:
+            return onnx_model, False
+        topTPPerm = attribute_to_dict(topTPNode.attribute).get('perm', list(range(len(topRSInShape))).reverse())
+        botTPPerm = attribute_to_dict(botTPNode.attribute).get('perm', list(range(len(botRSOutShape))).reverse())
+        backTopPerm = [topTPPerm[perm_id] for perm_id in topTPPerm]
+        backTopPerm = topTPPerm if list(range(len(topRSInShape))) == backTopPerm else backTopPerm
+        if botTPPerm != backTopPerm:
+            newPerm = [topTPPerm[perm_id] for perm_id in botTPPerm]
+            newTranspose = onnx.helper.make_node(name=topTPNode.name+'_fusionTranspose',
+                                                 op_type='Transpose',
+                                                 inputs=topTPNode.input,
+                                                 outputs=botTPNode.output,
+                                                 perm=newPerm)
+            onnx_model.graph.node.insert(node_index, newTranspose)
+        else:
+            botTPOutNodesList = get_node_by_input(onnx_model, botTPNode.output)
+            for botTPOutNode in botTPOutNodesList:
+                for inId, botTPOutNodeIn in enumerate(botTPOutNode.input):
+                    botTPOutNode.input[inId] = topTPNode.input[0] if botTPOutNodeIn == botTPNode.output[0] else botTPOutNodeIn
+        onnx_model.graph.node.remove(botTPNode)
+        for delNode in [botRSNode, topRSNode, topTPNode]:
+            delOutNodesList = get_node_by_input(onnx_model, delNode.output)
+            if not delOutNodesList:
+                onnx_model = delete_value_info_by_name(onnx_model, delNode.output[0])
+                onnx_model.graph.node.remove(delNode)
+            else:
+                break
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    return onnx_model, False 

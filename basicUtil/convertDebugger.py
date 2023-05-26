@@ -22,6 +22,7 @@ class OnnxDebuggerMeet(object):
                         logger.info("Graph optimization completed --> "+func.__name__+ ", node_name: " + node.name)
                         break
             if not restart:
+                onnx.save_model(onnx_model, "/workspace/nxu/project/Transformer/annotated-transformer/annatatedTransformer-multi30k-opt2.onnx")
                 onnx_model = infer_model_shape(onnx_model)
             return onnx_model            
         
