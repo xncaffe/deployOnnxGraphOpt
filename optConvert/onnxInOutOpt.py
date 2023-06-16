@@ -24,8 +24,10 @@ def opt_deleteGatherInput(onnx_model):
 @OnnxDebuggerMeet.opt_inout_wrapper
 def opt_mulReplaceWhereBoolInput(onnx_model):
     for index, node in enumerate(onnx_model.graph.node):
-        if check_node_serial_group(onnx_model, node, ["Unsqueeze", "Cast", "Equal", "Where"]):
+        if check_node_serial_group(onnx_model, node, ["Unsqueeze", "Cast", "Equal", "Where"]) or \
+            check_node_serial_group(onnx_model, node, ["Unsqueeze", "Equal", "Where"]):
             nodes_list = get_node_serial_group(onnx_model, node, ["Unsqueeze", "Cast", "Equal", "Where"])
+            nodes_list = get_node_serial_group(onnx_model, node, ["Unsqueeze", "Equal", "Where"]) if len(nodes_list) != 4 else nodes_list
             unsqueeze_node = nodes_list[0]
             netInputs_name = [input.name for input in onnx_model.graph.input]
             if unsqueeze_node.input[0] not in netInputs_name:
@@ -38,30 +40,34 @@ def opt_mulReplaceWhereBoolInput(onnx_model):
             parallBranchDicts = {}
             parallInputNodesCp = copy.deepcopy(parallInputNodes)
             for id, parallUnsqueeze in enumerate(parallInputNodesCp):
-                castNodes = get_node_by_input(onnx_model, parallUnsqueeze.output)
-                if castNodes[0].op_type != "Cast" or len(castNodes) != 1:
+                castOequalNodes = get_node_by_input(onnx_model, parallUnsqueeze.output)
+                if (castOequalNodes[0].op_type != "Cast" and len(nodes_list) == 4) or \
+                    (castOequalNodes[0].op_type != "Equal" and len(nodes_list) == 3) or len(castOequalNodes) != 1:
                     parallInputNodes.remove(parallUnsqueeze)
                     otherNodes.append(parallUnsqueeze)
                 else:
-                    parallBranchDicts[id] = [parallUnsqueeze, castNodes[0]]
+                    parallBranchDicts[id] = [parallUnsqueeze, castOequalNodes[0]]
             if not parallBranchDicts:
                 continue
-            parallBranchDictsCp = copy.deepcopy(parallBranchDicts)
-            for id in parallBranchDictsCp:
-                castNode = parallBranchDictsCp[id][1]
-                equalNodes = get_node_by_input(onnx_model, castNode.output)
-                if equalNodes[0].op_type != "Equal" or len(equalNodes) != 1:
-                    parallBranchDicts.remove(parallBranchDictsCp[id])
-                    parallInputNodes.remove(parallBranchDictsCp[id][0])
-                    otherNodes.append(parallBranchDictsCp[id][0])
-                else:
-                    parallBranchDicts[id].append(equalNodes[0])
-            if not parallBranchDicts:
-                continue
+            if len(nodes_list) == 4:
+                parallBranchDictsCp = copy.deepcopy(parallBranchDicts)
+                for id in parallBranchDictsCp:
+                    castNode = parallBranchDictsCp[id][1]
+                    equalNodes = get_node_by_input(onnx_model, castNode.output)
+                    if equalNodes[0].op_type != "Equal" or len(equalNodes) != 1:
+                        parallBranchDicts.remove(parallBranchDictsCp[id])
+                        parallInputNodes.remove(parallBranchDictsCp[id][0])
+                        otherNodes.append(parallBranchDictsCp[id][0])
+                    else:
+                        parallBranchDicts[id].append(equalNodes[0])
+                if not parallBranchDicts:
+                    continue
+            equalId = len(nodes_list) - 2
+            whereId = len(nodes_list) - 1
             parallBranchDictsCp = copy.deepcopy(parallBranchDicts)
             sperateShapes = []
             for id in parallBranchDictsCp:
-                equalNode = parallBranchDictsCp[id][2]
+                equalNode = parallBranchDictsCp[id][equalId]
                 whereNodes = get_node_by_input(onnx_model, equalNode.output)
                 if whereNodes[0].op_type != "Where" or len(whereNodes) != 1:
                     parallBranchDicts.remove(parallBranchDictsCp[id])
@@ -76,7 +82,7 @@ def opt_mulReplaceWhereBoolInput(onnx_model):
             for shape in sperateShapes:
                 shapeEqualIds = []
                 for id in parallBranchDicts:
-                    equalNode = parallBranchDicts[id][2]
+                    equalNode = parallBranchDicts[id][equalId]
                     equalOutShape = get_shape_by_name(onnx_model, equalNode.output[0])
                     if shape == equalOutShape:
                         shapeEqualIds.append(id)
@@ -91,8 +97,8 @@ def opt_mulReplaceWhereBoolInput(onnx_model):
                 newInsertMulDynamicInShape = sperateShapes[shapeId]
                 newNetInputTensor = onnx.helper.make_tensor_value_info(new_input_name, TensorProto.FLOAT, newInsertMulDynamicInShape)
                 for branchId in branchIds_list:
-                    whereNode = parallBranchDicts[branchId][3]
-                    equalNode = parallBranchDicts[branchId][2]
+                    whereNode = parallBranchDicts[branchId][whereId]
+                    equalNode = parallBranchDicts[branchId][equalId]
                     whereTrueInput = None
                     for whereInput in whereNode.input:
                         whereInputNode = get_node_by_output(onnx_model, whereInput)

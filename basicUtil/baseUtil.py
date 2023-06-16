@@ -325,3 +325,10 @@ def check_node_serial_group(onnx_model, node, op_patch_list):
         if node.op_type != op_patch_list[list_index]:
             return False
     return True
+
+def get_last_node_by_serial(onnx_model, serial_list):
+    maxNodeId = 0
+    for serialNode in serial_list:
+        serialId = get_node_id(onnx_model, serialNode)
+        maxNodeId = max(maxNodeId, serialId)
+    return onnx_model.graph.node[maxNodeId], maxNodeId

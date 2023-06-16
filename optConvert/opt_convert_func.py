@@ -388,4 +388,204 @@ def opt_fusionTransposeReshapeReshapeTranspose(onnx_model, node, node_index):
                 break
         onnx_model = delete_useless_input_in_initializer(onnx_model)
         return onnx_model, True
-    return onnx_model, False 
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionConvConvAdd(onnx_model, node, node_index):
+    def check_param_can_merge(leftNode, rightNode):
+        leftAttr = attribute_to_dict(leftNode.attribute)
+        rightAttr = attribute_to_dict(rightNode.attribute)
+        if leftAttr.get('auto_pad') is not None or rightAttr.get('auto_pad') is not None:
+            return False
+        lDilations = leftAttr.get('dilations', [1, 1])
+        rDilations = rightAttr.get('dilations', [1, 1])
+        lGroup = leftAttr.get('group', 1)
+        rGroup = rightAttr.get('group', 1)
+        lKnShape = leftAttr.get('kernel_shape', [1, 1])
+        rKnShape = rightAttr.get('kernel_shape', [1, 1])
+        lPads = leftAttr.get('pads', [0, 0, 0, 0])
+        rPads = rightAttr.get('pads', [0, 0, 0, 0])
+        lStrides = leftAttr.get('strides', [1, 1])
+        rStrides = rightAttr.get('strides', [1, 1])
+        if lDilations == rDilations and lGroup == rGroup and lKnShape == rKnShape and lPads == rPads and lStrides == rStrides:
+            return True
+        else:
+            return False
+    if check_node_serial_group(onnx_model, node, ['Conv', 'Add']):
+        leftConvNode, addNode = get_node_serial_group(onnx_model, node, ['Conv', 'Add'])
+        addOtherInput = addNode.input[1] if leftConvNode.output[0] == addNode.input[0] else addNode.input[0]
+        if find_init_by_name(onnx_model, addOtherInput):
+            return onnx_model, False
+        rightConvNode = get_node_by_output(onnx_model, addOtherInput)
+        if rightConvNode.op_type != 'Conv':
+            return onnx_model, False
+        lCNodeOShape = get_shape_by_name(onnx_model, leftConvNode.output[0])
+        rCNodeOShape = get_shape_by_name(onnx_model, addOtherInput)
+        if lCNodeOShape != rCNodeOShape:
+            return onnx_model, False
+        leftConvWt = get_tensor_from_initializer(onnx_model, leftConvNode.input[1])
+        rightConvWt = get_tensor_from_initializer(onnx_model, rightConvNode.input[1])
+        if not leftConvWt.size or not rightConvWt.size or not check_param_can_merge(leftConvNode, rightConvNode):
+            return onnx_model, False
+        leftConvBs = get_tensor_from_initializer(onnx_model, leftConvNode.input[2]) if len(leftConvNode.input) == 3 else None
+        rightConvBs = get_tensor_from_initializer(onnx_model, rightConvNode.input[2]) if len(rightConvNode.input) == 3 else None
+        if leftConvBs is not None or rightConvBs is not None:
+            leftConvBs = np.zeros(lCNodeOShape[1], dtype=np.float32) if leftConvBs is None else leftConvBs
+            rightConvBs = np.zeros(rCNodeOShape[1], dtype=np.float32) if rightConvBs is None else rightConvBs
+        newConcatNode = onnx.helper.make_node(name=addNode.name+"_toConcat",
+                                              op_type='Concat',
+                                              inputs=[leftConvNode.input[0], rightConvNode.input[0]],
+                                              outputs=[addNode.output[0]+'_concat_out'],
+                                              axis=1)
+        newConvWt = np.concatenate((leftConvWt, rightConvWt), axis=1)
+        newConvBs = None
+        if leftConvBs is not None and rightConvBs is not None:
+            newConvBs = np.concatenate(leftConvBs, rightConvBs)
+        newConvWtTensor = onnx.helper.make_tensor(name=get_unique_node_tensor_name(onnx_model, addNode.name+'_fusionConv_wt'),
+                                                  data_type=NPDTYPE_2_ONNXDTYPE[newConvWt.dtype],
+                                                  dims=newConvWt.shape,
+                                                  vals=newConvWt.flatten().tolist())
+        onnx_model.graph.initializer.append(newConvWtTensor)
+        newConvInputs = [newConcatNode.output[0], newConvWtTensor.name]
+        if newConvBs is not None:
+            newConvBsTensor = onnx.helper.make_tensor(name=get_unique_node_tensor_name(onnx_model, addNode.name+'_fusionConv_bs'),
+                                                      data_type=NPDTYPE_2_ONNXDTYPE[newConvBs.dtype],
+                                                      dims=newConvBs.shape,
+                                                      vals=newConvBs.tolist())
+            onnx_model.graph.initializer.append(newConvBsTensor)
+            newConvInputs.append(newConvBsTensor.name)
+        newConvAttrDict = attribute_to_dict(leftConvNode.attribute)
+        newConvNode = onnx.helper.make_node(name=addNode.name+'_fusionConv',
+                                            op_type="Conv",
+                                            inputs=newConvInputs,
+                                            outputs=addNode.output,
+                                            **newConvAttrDict)
+        newConcatOutShape = get_shape_by_name(onnx_model, leftConvNode.input[0])
+        newConcatOutShape[1] += get_shape_by_name(onnx_model, rightConvNode.input[0])[1]
+        newConcatOutValue = onnx.helper.make_tensor_value_info(newConcatNode.output[0], 1, newConcatOutShape)
+        onnx_model.graph.value_info.append(newConcatOutValue)
+        addNodeId = get_node_id(onnx_model, addNode)
+        onnx_model.graph.node.insert(addNodeId, newConvNode)
+        onnx_model.graph.node.insert(addNodeId, newConcatNode)
+        onnx_model = delete_nodes(onnx_model, [leftConvNode, rightConvNode, addNode])
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        onnx_model = delete_value_info_by_name(onnx_model, leftConvNode.output[0])
+        onnx_model = delete_value_info_by_name(onnx_model, rightConvNode.output[0])
+        return onnx_model, True
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionMultiConcat(onnx_model, node, node_index):
+    def get_concat_serial_group(onnx_model, concat1st):
+        reConcatNodes = [concat1st]
+        _1stAxis = attribute_to_dict(concat1st.attribute).get('axis', 1)
+        nextConcatsList = [concat1st]
+        while True:
+            concatSerialNodes = []
+            for nextConcatNode in nextConcatsList:
+                nextNodes = get_node_by_input(onnx_model, nextConcatNode.output)
+                nextConcatNodes = [next_node for next_node in nextNodes \
+                    if next_node.op_type == 'Concat' and attribute_to_dict(next_node.attribute).get('axis', 1) == _1stAxis]
+                nextConcatNodes = [nextConcatNode for nextConcatNode in nextConcatNodes if nextConcatNode not in concatSerialNodes]
+                concatSerialNodes += nextConcatNodes
+            nextConcatsList = concatSerialNodes
+            if not nextConcatsList:
+                break
+            reConcatNodes += nextConcatsList
+        return reConcatNodes
+    if node.op_type == 'Concat':
+        concatNodesList = get_concat_serial_group(onnx_model, node)
+        if len(concatNodesList) == 1:
+            return onnx_model, False
+        newConcatInputs = []
+        for concatNode in concatNodesList:
+            concatNodeInputs = list(concatNode.input)
+            concatNodeInputs.reverse()
+            for input in concatNodeInputs:
+                inNode = get_node_by_output(onnx_model, input)
+                if inNode not in concatNodesList and input not in newConcatInputs:
+                    newConcatInputs.append(input)
+        newConcatInputs.reverse()
+        lastConcatNode, lastId = get_last_node_by_serial(onnx_model, concatNodesList)
+        newConcatNode = onnx.helper.make_node(name=lastConcatNode.name+'_fusionConcat',
+                                              op_type='Concat', 
+                                              inputs=newConcatInputs,
+                                              outputs=lastConcatNode.output,
+                                              axis=attribute_to_dict(lastConcatNode.attribute).get('axis', 1))
+        onnx_model.graph.node.insert(lastId, newConcatNode)
+        for concatNode in concatNodesList:
+            if concatNode.name != lastConcatNode.name:
+                onnx_model = delete_value_info_by_name(onnx_model, concatNode.output[0])
+        onnx_model = delete_nodes(onnx_model, concatNodesList)
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionConcatSlice(onnx_model, node, node_index):
+    if node.op_type == 'Concat':
+        concatOutShape = get_shape_by_name(onnx_model, node.output[0])
+        if len(concatOutShape) != 4:
+            return onnx_model, False
+        inputsList = list(node.input)
+        outNodesList = get_node_by_input(onnx_model, node.output)
+        if len(outNodesList) != len(inputsList):
+            return onnx_model, False
+        outSliceNodes = [outNode for outNode in outNodesList if outNode.op_type == 'Slice']
+        if len(outSliceNodes) != len(inputsList):
+            return onnx_model, False
+        concatAxis = attribute_to_dict(node.attribute).get('axis', 1)
+        concatInDatas = {}
+        concatOutData = np.array([])
+        for concatInput in inputsList:
+            inputShape = get_shape_by_name(onnx_model, concatInput)
+            inputData = np.array(np.random.random(size=tuple(inputShape)), dtype=np.float32)
+            if concatInput != inputsList[0]:
+                while True:
+                    trueList = [cInData for cInData in list(concatInDatas.values()) if (cInData==inputData).all()]
+                    if trueList:
+                        inputData = np.array(np.random.random(size=tuple(inputShape)), dtype=np.float32)
+                    else:
+                        break
+            concatInDatas[concatInput] = inputData
+            concatOutData = np.concatenate((concatOutData, inputData), axis=concatAxis) if concatInput != inputsList[0] else inputData
+        sIdSpondConcat = []
+        for sliceNode in outSliceNodes:
+            if len(sliceNode.input) < 5:
+                return onnx_model, False
+            sliceStart = get_tensor_from_initializer(onnx_model, sliceNode.input[1])
+            sliceEnd = get_tensor_from_initializer(onnx_model, sliceNode.input[2])
+            sliceAxes = get_tensor_from_initializer(onnx_model, sliceNode.input[3])
+            sliceStep = get_tensor_from_initializer(onnx_model, sliceNode.input[4])
+            if sliceStep != 1 or sliceStart.size > 1 or sliceEnd.size > 1 or sliceAxes.size > 1 or int(sliceAxes) in [-4, 0]:
+                return onnx_model, False
+            if int(sliceAxes) in [1, -3]:
+                sliceData = concatOutData[:, int(sliceStart):int(sliceEnd), :, :]
+            elif int(sliceAxes) in [2, -2]:
+                sliceData = concatOutData[:, :, int(sliceStart):int(sliceEnd), :]
+            else:
+                sliceData = concatOutData[:, :, :, int(sliceStart):int(sliceEnd)]
+            sIdFromConcat = [id for id, cInData in enumerate(list(concatInDatas.values())) if (cInData==sliceData).all()]
+            if not sIdFromConcat:
+                return onnx_model, False
+            else:
+                sIdFromConcat = sIdFromConcat[0]
+            sIdSpondConcat.append(sIdFromConcat)
+            
+        for vid, sliceNode in enumerate(outSliceNodes):
+            concatInShape = get_shape_by_name(onnx_model, inputsList[sIdSpondConcat[vid]])
+            sliceInShape = get_shape_by_name(onnx_model, sliceNode.output[0])
+            if sliceInShape != concatInShape:
+                return onnx_model, False
+
+        for vid, sliceNode in enumerate(outSliceNodes):
+            sliceOutNodes = get_node_by_input(onnx_model, sliceNode.output)
+            for sliceOutNode in sliceOutNodes:
+                for sOId, sliceOutNodeInput in enumerate(sliceOutNode.input):
+                    sliceOutNode.input[sOId] = inputsList[sIdSpondConcat[vid]] if sliceOutNodeInput == sliceNode.output[0] else sliceOutNodeInput
+            onnx_model = delete_value_info_by_name(onnx_model, sliceNode.output[0])
+        onnx_model = delete_nodes(onnx_model, outSliceNodes+[node])
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    else:
+        return onnx_model, False

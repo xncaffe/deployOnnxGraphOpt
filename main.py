@@ -12,6 +12,7 @@ def parse_args():
     parser.add_argument("-i", "--input_model", type=str, default="/workspace/nxu/project/Transformer/annotated-transformer/annatatedTransformer-multi30k.onnx", help="input onnx model path")
     parser.add_argument("-o", "--output_model", type=str, default="/workspace/nxu/project/Transformer/annotated-transformer/annatatedTransformer-multi30k-opt.onnx", help="output onnx model path")
     parser.add_argument("-v", "--convert_opset", type=int, default=11, help="whether to convert opset version")
+    parser.add_argument("--debug", action='store_true', help="run mode is debug or release, defualt release")
     args = parser.parse_args()
     return args
 
@@ -19,7 +20,8 @@ def main(args):
     dstOptSetVer = args.convert_opset
     srcPath = args.input_model
     dstPath = args.output_model
-
+    args.debug = True
+    debug_mode = 'debug' if args.debug else 'release'
     '''
     PreProcess
     '''
@@ -33,7 +35,7 @@ def main(args):
     Explanation run opt
     '''
     logger = logging.getLogger("[OPTPROC]")
-    clsOpt = OnnxConvertOptimizer(onnx_model=onnx_model)
+    clsOpt = OnnxConvertOptimizer(onnx_model=onnx_model, debug_mode=debug_mode)
     logger.info("Start run opt ... ")
     onnx_model = clsOpt.opt()
     logger.info("Opt finish!")

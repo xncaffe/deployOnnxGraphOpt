@@ -64,11 +64,15 @@ def model_preprocess(onnx_model):
     return onnx_model   
 
 class OnnxConvertOptimizer(object):
-    def __init__(self, onnx_model):
+    def __init__(self, onnx_model, debug_mode):
         self.onnx_model = onnx_model
+        self.debug_mode = debug_mode
     
     #@classmethod
     def opt(self):
+        OnnxDebuggerMeet.set_debug_mode(self.debug_mode)
+        OnnxDebuggerMeet.get_opset_version(self.onnx_model)
+        
         self.onnx_model = opt_deleteGatherInput(self.onnx_model)
         self.onnx_model = opt_mulReplaceWhereBoolInput(self.onnx_model)
         if self.onnx_model.opset_import[0].version >= 17:
@@ -91,5 +95,8 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_fusionInputTranspose(self.onnx_model)
         self.onnx_model = opt_fusionTransposeReshapeReshapeTranspose(self.onnx_model)
         self.onnx_model = opt_3dimInputReshapeTo4dim(self.onnx_model)
+        self.onnx_model = opt_fusionConvConvAdd(self.onnx_model)
+        self.onnx_model = opt_fusionMultiConcat(self.onnx_model)
+        self.onnx_model = opt_fusionConcatSlice(self.onnx_model)
         return self.onnx_model         
         

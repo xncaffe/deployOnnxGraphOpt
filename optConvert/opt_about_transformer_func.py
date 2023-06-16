@@ -256,6 +256,7 @@ def opt_splitVxSoftmax2DynamicConv(onnx_model, node, node_index):
                 return None
         VTransposePerm = attribute_to_dict(VTransposeNode.attribute).get("perm")
         SoftmaxAxis = attribute_to_dict(SoftmaxNode.attribute).get("axis", 1)
+        SoftmaxAxis = len(SoftmaxInShape) + SoftmaxAxis if SoftmaxAxis < 0 else SoftmaxAxis
         if VTransposePerm != [0, 1, 3, 2] or SoftmaxAxis != 3:
             return None
         return [matMulNode, VTransposeNode, VReshapeNode, SoftmaxNode]
