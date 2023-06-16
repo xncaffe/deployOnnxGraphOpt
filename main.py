@@ -20,7 +20,6 @@ def main(args):
     dstOptSetVer = args.convert_opset
     srcPath = args.input_model
     dstPath = args.output_model
-    args.debug = True
     debug_mode = 'debug' if args.debug else 'release'
     '''
     PreProcess

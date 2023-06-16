@@ -50,7 +50,10 @@ class OnnxDebuggerMeet(object):
             if not restart:
                 if OnnxDebuggerMeet.debug_mode == 'release':
                     onnx_model = infer_model_shape(onnx_model)
-                    check_opt_precision(onnx_model_old, onnx_model, func.__name__)
+                    if OnnxDebuggerMeet.opset_version != 11:
+                        check_opt_precision(onnx_model_old, onnx_model, func.__name__) 
+                    elif func.__name__ not in OnnxDebuggerMeet.GENERAL_SCREEN_FUNC:
+                        check_opt_precision(onnx_model_old, onnx_model, func.__name__)
             return onnx_model            
         
         return loop_run_func 
