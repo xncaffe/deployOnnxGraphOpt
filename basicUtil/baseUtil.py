@@ -332,3 +332,19 @@ def get_last_node_by_serial(onnx_model, serial_list):
         serialId = get_node_id(onnx_model, serialNode)
         maxNodeId = max(maxNodeId, serialId)
     return onnx_model.graph.node[maxNodeId], maxNodeId
+
+def get_initial_by_value(onnx_model, src_tensor: np.array):
+    for initial in onnx_model.graph.initializer:
+        init_tensor = onnx.numpy_helper.to_array(initial)
+        if np.array((init_tensor == src_tensor), dtype=np.bool8).all():
+            return initial
+    return None
+
+def get_initial_by_name(onnx_model, name):
+    for initial in onnx_model.graph.initializer:
+        if initial.name == name:
+            return initial
+    return None
+
+def get_opset_version(onnx_model):
+    return onnx_model.opset_import[0].version

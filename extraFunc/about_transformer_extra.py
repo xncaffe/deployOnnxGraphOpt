@@ -165,3 +165,71 @@ def get_layernormal_node_dict(onnx_model, addNode):
                    'div': divNode,
                    'output': addNode}
     return reNodesDict
+
+def get_vit_kqv_block_nodes(onnx_model, node):
+    if node.op_type != 'MatMul':
+        return None
+    vReshape = get_node_by_output(onnx_model, node.input[0])
+    if vReshape is None or vReshape.op_type != 'Reshape':
+        return None
+    kqTranspose = get_node_by_output(onnx_model, node.input[1])
+    if kqTranspose is None or kqTranspose.op_type != 'Transpose':
+        return None
+    kqSoftmax = get_node_by_output(onnx_model, kqTranspose.input[0])
+    if kqSoftmax is None or kqSoftmax.op_type != 'Softmax':
+        return None
+    kqAdd = get_node_by_output(onnx_model, kqSoftmax.input[0])
+    if kqAdd is None or kqAdd.op_type != 'Add':
+        return None
+    if not find_init_by_name(onnx_model, kqAdd.input[0]) and not find_init_by_name(onnx_model, kqAdd.input[1]):
+        return None
+    dynamicKQAddIn = kqAdd.input[0] if find_init_by_name(onnx_model, kqAdd.input[1]) else kqAdd.input[1]
+    if find_init_by_name(onnx_model, dynamicKQAddIn):
+        return None
+    kqMul = get_node_by_output(onnx_model, dynamicKQAddIn)
+    if kqMul is None or kqMul.op_type != 'Mul':
+        return None
+    if not find_init_by_name(onnx_model, kqMul.input[0]) and not find_init_by_name(onnx_model, kqMul.input[1]):
+        return None
+    dynamicKQMulIn = kqMul.input[0] if find_init_by_name(onnx_model, kqMul.input[1]) else kqMul.input[1]
+    if find_init_by_name(onnx_model, dynamicKQMulIn):
+        return None
+    kqMatMul = get_node_by_output(onnx_model, dynamicKQMulIn)
+    if kqMatMul is None or kqMatMul.op_type != 'MatMul':
+        return None
+    qReshape = get_node_by_output(onnx_model, kqMatMul.input[1])
+    if qReshape is None or qReshape.op_type != 'Reshape':
+        return None
+    kTranspose = get_node_by_output(onnx_model, kqMatMul.input[0])
+    if kTranspose is None or kTranspose.op_type != 'Transpose':
+        return None
+    kReshape = get_node_by_output(onnx_model, kTranspose.input[0])
+    if kReshape is None or kReshape.op_type != 'Reshape':
+        return None
+    kConv = get_node_by_output(onnx_model, kReshape.input[0])
+    if kConv is None or kConv.op_type != 'Conv':
+        return None
+    # kSplit = get_node_by_output(onnx_model, kConv.input[0])
+    # if kConv is None or kSplit.op_type != 'Split':
+    #     return None
+    # qSplit = get_node_by_output(onnx_model, qReshape.input[0])
+    # if qSplit is None or qSplit.op_type != 'Split':
+    #     return None
+    # vSplit = get_node_by_output(onnx_model, vReshape.input[0])
+    # if vSplit is None or vSplit.op_type != 'Split':
+    #     return None
+    # if kSplit != qSplit != vSplit:
+    #     return None
+    # topConv = get_node_by_output(onnx_model, kSplit.input[0])
+    # if topConv is None or topConv.op_type != 'Conv':
+    #     return None
+    # topAdd = get_node_by_output(onnx_model, topConv.input[0])
+    # if topAdd is None or topAdd.op_type is 'Add':
+    #     return None
+    reNodesDict = {
+        'k_serial': [kConv, kReshape, kTranspose],
+        'q_serial': [qReshape],
+        'kq_serial': [kqMatMul, kqMul, kqAdd, kqSoftmax, kqTranspose],
+        'v_serial': [vReshape]
+    }
+    return reNodesDict

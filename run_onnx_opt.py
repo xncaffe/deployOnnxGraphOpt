@@ -97,6 +97,17 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_3dimInputReshapeTo4dim(self.onnx_model)
         self.onnx_model = opt_fusionConvConvAdd(self.onnx_model)
         self.onnx_model = opt_fusionMultiConcat(self.onnx_model)
+        
+        self.onnx_model = opt_fusionTransposeReshapeTransposeReshapeTranspose(self.onnx_model)
+        self.onnx_model = opt_convertViT_attention(self.onnx_model)
+        self.onnx_model = opt_convertMultiBatchConvToOneBatch(self.onnx_model)
+        self.onnx_model = opt_convertMultiBatchSplit2OneBatchSliceConcat(self.onnx_model)
+        self.onnx_model = opt_convertMultiBatchAddReshapeToOneBatchReshapeAdd(self.onnx_model)
+        self.onnx_model = opt_convertMultiBatchReshapeConcatReshapeToOneBatchSliceConcat(self.onnx_model)
+        self.onnx_model = opt_convertMultiBatchReshapeSliceReshapeToOneBatchSliceConcat(self.onnx_model)
+        
         self.onnx_model = opt_fusionConcatSlice(self.onnx_model)
+        self.onnx_model = opt_convertMSliceConcatNxMSlice(self.onnx_model)
+        self.onnx_model = opt_convertConcatNxSliceAddToNxAdd(self.onnx_model)
         return self.onnx_model         
         
