@@ -77,6 +77,7 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_mulReplaceWhereBoolInput(self.onnx_model)
         if self.onnx_model.opset_import[0].version >= 17:
             self.onnx_model = opt_fusionSeparatedLayerNormal(self.onnx_model)
+        self.onnx_model = opt_deleteUselessReshape(self.onnx_model)
         self.onnx_model = opt_fusionMultiMulDiv(self.onnx_model)
         self.onnx_model = opt_replaceDivByMul(self.onnx_model)
         self.onnx_model = opt_fusionMultiSubReduceMean(self.onnx_model)
@@ -106,8 +107,12 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_convertMultiBatchReshapeConcatReshapeToOneBatchSliceConcat(self.onnx_model)
         self.onnx_model = opt_convertMultiBatchReshapeSliceReshapeToOneBatchSliceConcat(self.onnx_model)
         
+        self.onnx_model = opt_convertCustomThrConvKQV(self.onnx_model)
+        
         self.onnx_model = opt_fusionConcatSlice(self.onnx_model)
         self.onnx_model = opt_convertMSliceConcatNxMSlice(self.onnx_model)
         self.onnx_model = opt_convertConcatNxSliceAddToNxAdd(self.onnx_model)
+        self.onnx_model = opt_convertInputW1ToH1(self.onnx_model)
+
         return self.onnx_model         
         

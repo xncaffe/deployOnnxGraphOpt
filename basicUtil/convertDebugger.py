@@ -15,7 +15,8 @@ class OnnxDebuggerMeet(object):
     ]
     GENERAL_SCREEN_FUNC = [
         'opt_splitVxSoftmax2DynamicConv',
-        'opt_convertViT_attention'
+        'opt_convertViT_attention',
+        'opt_convertCustomThrConvKQV'
     ]
  
     @staticmethod
@@ -49,6 +50,7 @@ class OnnxDebuggerMeet(object):
                             elif func.__name__ not in OnnxDebuggerMeet.GENERAL_SCREEN_FUNC:
                                 check_opt_precision(onnx_model_old, onnx_model, func.__name__)      
                             onnx_model_old = copy.deepcopy(onnx_model)
+                        print('')
                         break
             if not restart and do_opt:
                 if OnnxDebuggerMeet.debug_mode == 'release':
@@ -78,6 +80,7 @@ class OnnxDebuggerMeet(object):
                         onnx_model = infer_model_shape(onnx_model)
                         check_opt_precision(onnx_model_old, onnx_model, func.__name__)
                         onnx_model_old = copy.deepcopy(onnx_model)
+                    print('')
             return onnx_model            
         
         return loop_run_func

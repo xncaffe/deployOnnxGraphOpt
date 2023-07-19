@@ -373,3 +373,56 @@ def opt_3dimInputReshapeTo4dim(onnx_model):
         onnx_model = delete_useless_inputOfModel(onnx_model)
         return onnx_model, True
     return onnx_model, False
+
+@OnnxDebuggerMeet.opt_inout_wrapper
+def opt_convertInputW1ToH1(onnx_model):
+    def clear_useless_reshape(onnx_model):
+        onnx_model_cp = copy.deepcopy(onnx_model)
+        for node in onnx_model_cp.graph.node:
+            if node.op_type == 'Reshape':
+                inShape = get_shape_by_name(onnx_model_cp, node.input[0])
+                outShape = get_shape_by_name(onnx_model_cp, node.output[0])
+                if inShape == outShape:
+                    outNodesList = get_node_by_input(onnx_model, node.output)
+                    for outNode in outNodesList:
+                        for idx, outNodeInput in enumerate(outNode.input):
+                            outNode.input[idx] = node.input[0] if outNodeInput == node.output[0] else outNodeInput
+                    onnx_model = delete_value_info_by_name(onnx_model, node.output[0])
+                    onnx_model = delete_nodes(onnx_model, [node])
+                    onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model
+    
+    onnx_model_new = copy.deepcopy(onnx_model)
+    for idx, netInput in enumerate(onnx_model_new.graph.input):
+        netInShape = get_shape_by_name(onnx_model_new, netInput.name)
+        if len(netInShape) != 4 or netInShape[-1] != 1:
+            continue
+        newInShape = netInShape[:2] + [netInShape[-1], netInShape[2]]
+        newNetInput = onnx.helper.make_tensor_value_info(netInput.name, netInput.type.tensor_type.elem_type, newInShape)
+        onnx_model_new.graph.input.remove(netInput)
+        onnx_model_new.graph.input.insert(idx, newNetInput)
+        del onnx_model_new.graph.value_info[:]
+        netOutNames = [netOutput.name for netOutput in onnx_model_new.graph.output]
+        netOutElemTypes = [netOutput.type.tensor_type.elem_type for netOutput in onnx_model_new.graph.output]
+        netOutElemTypeDict = OrderedDict(zip(netOutNames, netOutElemTypes))
+        del onnx_model_new.graph.output[:]
+        for outName in netOutNames:
+            onnx_model_new.graph.output.extend([onnx.ValueInfoProto(name=outName)])
+        out_old = forward_by_onnxruntime(onnx_model)
+        out_new = forward_by_onnxruntime(onnx_model_new)
+        newOutShape = {}
+        for outKey in list(out_old.keys()):
+            newOutShape[outKey] = out_new[outKey].shape
+            out_old[outKey] = out_old[outKey].flatten()
+            out_new[outKey] = out_new[outKey].flatten()
+        if out_old.keys() == out_new.keys() and list(out_old.values()) == list(out_old.values()):
+            del onnx_model_new.graph.output[:]
+            for outName in netOutNames:
+                newNetOut = onnx.helper.make_tensor_value_info(outName, netOutElemTypeDict[outName], newOutShape[outName])
+                onnx_model_new.graph.output.append(newNetOut)
+            onnx_model_new = infer_model_shape(onnx_model_new)
+            onnx_model_new = clear_useless_reshape(onnx_model_new)
+            return onnx_model_new, True
+        else:
+            continue
+    return onnx_model, False

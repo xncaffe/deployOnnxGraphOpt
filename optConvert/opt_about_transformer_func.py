@@ -1029,7 +1029,8 @@ def opt_transposeReshape3dimAddTo4dimAdd(onnx_model, node, node_index):
         return onnx_model, False
     leftReshapeNode = get_node_by_output(onnx_model, node.input[0])
     rightReshapeNode = get_node_by_output(onnx_model, node.input[1])
-    if leftReshapeNode.op_type != 'Reshape' or rightReshapeNode.op_type != 'Reshape':
+    if leftReshapeNode is None or rightReshapeNode is None \
+        or leftReshapeNode.op_type != 'Reshape' or rightReshapeNode.op_type != 'Reshape':
         return onnx_model, False
     leftTransposeNode = get_node_by_output(onnx_model, leftReshapeNode.input[0])
     rightTransposeNode = get_node_by_output(onnx_model, rightReshapeNode.input[0])
@@ -1724,4 +1725,229 @@ def opt_convertViT_attention(onnx_model, node, node_index):
             return convert_multi_batch(onnx_model, node, node_index, tfNodeSerial)
         else:
             return convert_one_batch(onnx_model, node, node_index, tfNodeSerial)   
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_convertCustomThrConvKQV(onnx_model, node, node_index):
+    if node.op_type == 'MatMul':
+        nodes_serial =get_custom_three_conv_kqv_block_nodes(onnx_model, node)
+        if nodes_serial is None:
+            return onnx_model, False
+        kConv = nodes_serial['k_serial'][0]
+        kConvInShape = get_shape_by_name(onnx_model, kConv.input[0])
+        kConvOutShape = get_shape_by_name(onnx_model, kConv.output[0])
+        qConv = nodes_serial['q_serial'][0]
+        qConvInShape = get_shape_by_name(onnx_model, qConv.input[0])
+        qConvOutShape = get_shape_by_name(onnx_model, qConv.output[0])
+        vConv = nodes_serial['v_serial'][0]
+        vConvInShape = get_shape_by_name(onnx_model, vConv.input[0])
+        vConvOutShape = get_shape_by_name(onnx_model, vConv.output[0])
+        if len(kConvInShape) != len(vConvInShape) != len(qConvInShape) != 4 \
+            or kConvInShape[0] != qConvInShape[0] != vConvInShape[0] != 1:
+                return onnx_model, False
+        if kConvOutShape[:2] != qConvOutShape[:2] or qConvOutShape[2:] != vConvOutShape[2:]:
+            return onnx_model, False
+        kReshape = nodes_serial['k_serial'][1]
+        kRSOutShape = get_shape_by_name(onnx_model, kReshape.output[0])
+        if len(kRSOutShape) not in [3, 4] or kRSOutShape[-2]*kRSOutShape[-3] != kConvOutShape[1] \
+            or kRSOutShape[-1] != kConvOutShape[2]*kConvOutShape[3]:
+                return onnx_model, False
+        kTranspose = nodes_serial['k_serial'][2]
+        kTPPerm = attribute_to_dict(kTranspose.attribute).get('perm', list(range(len(kRSOutShape))).reverse())
+        if kTPPerm not in [[0, 1, 3, 2], [0, 2, 1]]:
+            return onnx_model, False
+        qReshape = nodes_serial['q_serial'][1]
+        qRSOutShape = get_shape_by_name(onnx_model, qReshape.output[0])
+        if len(kRSOutShape) != len(qRSOutShape) or qRSOutShape[-2]*qRSOutShape[-3] != qConvOutShape[1] \
+            or qRSOutShape[-1] != qConvOutShape[2]*qConvOutShape[3]:
+                return onnx_model, False
+        kqTranspose = nodes_serial['kq_serial'][2]
+        kqTPPerm = attribute_to_dict(kqTranspose.attribute).get('perm', list(range(len(qRSOutShape))).reverse())
+        if kqTPPerm != kTPPerm:
+            return onnx_model, False
+        vReshape = nodes_serial['v_serial'][1]
+        vRSOutShape = get_shape_by_name(onnx_model, vReshape.output[0])
+        if len(vRSOutShape) != len(qRSOutShape) or vRSOutShape[-2]*vRSOutShape[-3] != vConvOutShape[1] \
+            or vRSOutShape[-1] != vConvOutShape[2]*vConvOutShape[3] or vRSOutShape[-3] != qRSOutShape[-3]:
+                return onnx_model, False
+        kqMatMul = nodes_serial['kq_serial'][0]
+        kqMatMulOutShape = get_shape_by_name(onnx_model, kqMatMul.output[0])
+        kqSoftmax = nodes_serial['kq_serial'][1]
+        kqSoftmaxAxis = attribute_to_dict(kqSoftmax.attribute).get('axis', 1)
+        kqSoftmaxAxis = len(kqMatMulOutShape) + kqSoftmaxAxis if kqSoftmaxAxis < 0 else kqSoftmaxAxis
+        if kqSoftmaxAxis not in [len(kqMatMulOutShape), len(kqMatMulOutShape) - 1]:
+            return onnx_model, False
+        sliceStart = 0
+        sliceStartTensor = get_initial_by_value(onnx_model, np.array(sliceStart, dtype=np.int64))
+        if sliceStartTensor is None:
+            sliceStartTensor = onnx.helper.make_tensor(name=node.name+'_slice_kqv_loc0',
+                                                       data_type=TensorProto.INT64,
+                                                       dims=[1],
+                                                       vals=[sliceStart])
+            onnx_model.graph.initializer.append(sliceStartTensor)
+        sliceAxesTensor = get_initial_by_value(onnx_model, np.array(1, dtype=np.int64))
+        if sliceAxesTensor is None:
+            sliceAxesTensor = onnx.helper.make_tensor(name=node.name+'_slice_kqv_param',
+                                                      data_type=TensorProto.INT64,
+                                                      dims=[1],
+                                                      vals=[1])
+            onnx_model.graph.initializer.append(sliceAxesTensor)
+        sliceStepTensor = sliceAxesTensor
+        newConvAttr = {'dilations': [1, 1], 'group': 1, 'kernel_shape': [1, 1], 'pads': [0, 0, 0, 0], 'strides': [1, 1]}
+        newKQSoftmaxAxis = 1 if kqSoftmaxAxis == len(kqMatMulOutShape) - 1 else 2
+        splitNum = qRSOutShape[-3]
+        kqSpace = qRSOutShape[-2]
+        vSpace = vRSOutShape[-2]
+        sliceKQStartTensor = sliceStartTensor
+        sliceVStartTensor = sliceStartTensor
+        sliceKQStart = sliceStart
+        sliceVStart = sliceStart
+        sliceNodesList = []
+        f2wRSNodesList = []
+        f2wTPNodesList = []
+        sKQMMNodesList = []
+        sKQSMNodesList = []
+        sKQVMMNodesList = []
+        concatInputs = []
+        for ids in range(splitNum):
+            sliceKQEnd = sliceKQStart + kqSpace
+            sliceKQEndTensor = get_initial_by_value(onnx_model, np.array(sliceKQEnd, dtype=np.int64))
+            if sliceKQEndTensor is None:
+                sliceKQEndTensorName = node.name + '_slice_' + ('kqv' if kqSpace == vSpace else 'kq') + '_loc%d'%(ids+1)
+                sliceKQEndTensor = onnx.helper.make_tensor(name=sliceKQEndTensorName,
+                                                           data_type=TensorProto.INT64,
+                                                           dims=[1],
+                                                           vals=[sliceKQEnd])
+                onnx_model.graph.initializer.append(sliceKQEndTensor)
+            sliceVEnd = sliceVStart + vSpace
+            sliceVEndTensor = get_initial_by_value(onnx_model, np.array(sliceVEnd, dtype=np.int64))
+            if sliceVEndTensor is None:
+                sliceVEndTensor = onnx.helper.make_tensor(name=node.name+'_slice_v_loc%d'%(ids+1),
+                                                          data_type=TensorProto.INT64,
+                                                          dims=[1],
+                                                          vals=[sliceVEnd])
+                onnx_model.graph.initializer.append(sliceVEndTensor)
+            kSliceInputs = [kConv.output[0], sliceKQStartTensor.name, sliceKQEndTensor.name, sliceAxesTensor.name, sliceStepTensor.name]
+            kSliceNode = onnx.helper.make_node(name=kConv.name+'_slice_%d'%ids,
+                                               op_type='Slice',
+                                               inputs=kSliceInputs,
+                                               outputs=[kConv.output[0]+'_slice%d'%ids])
+            sliceNodesList.append(kSliceNode)
+            qSliceInputs = [qConv.output[0], sliceKQStartTensor.name, sliceKQEndTensor.name, sliceAxesTensor.name, sliceStepTensor.name]
+            qSliceNode = onnx.helper.make_node(name=qConv.name+'_slice_%d'%ids,
+                                               op_type='Slice',
+                                               inputs=qSliceInputs,
+                                               outputs=[qConv.output[0]+'_slice_%d'%ids])
+            sliceNodesList.append(qSliceNode)
+            vSliceInputs = [vConv.output[0], sliceVStartTensor.name, sliceVEndTensor.name, sliceAxesTensor.name, sliceStepTensor.name]
+            vSliceNode = onnx.helper.make_node(name=vConv.name+'_slice_%d'%ids,
+                                               op_type='Slice',
+                                               inputs=vSliceInputs,
+                                               outputs=[vConv.output[0]+'_slice_%d'%ids])
+            sliceNodesList.append(vSliceNode)
+            qSliceRSShape = [qConvOutShape[0], kqSpace, 1, qRSOutShape[-1]]
+            qSliceRSShapeTensor = get_initial_by_value(onnx_model, np.array(qSliceRSShape, dtype=np.int64))
+            if qSliceRSShapeTensor is None:
+                qSliceRSShapeTensor = onnx.helper.make_tensor(name=qReshape.input[1]+'_new_%d'%ids,
+                                                              data_type=TensorProto.INT64,
+                                                              dims=[len(qSliceRSShape)],
+                                                              vals=qSliceRSShape)
+                onnx_model.graph.initializer.append(qSliceRSShapeTensor)
+            qSliceRSNode = onnx.helper.make_node(name=qReshape.name+'_new_%d'%ids,
+                                                 op_type='Reshape',
+                                                 inputs=[qSliceNode.output[0], qSliceRSShapeTensor.name],
+                                                 outputs=[qReshape.output[0]+'_slice_%d'%ids])
+            f2wRSNodesList.append(qSliceRSNode)
+            qSliceTPNode = onnx.helper.make_node(name=kTranspose.name+'_new_to_k_%d'%ids,
+                                                 op_type='Transpose',
+                                                 inputs=qSliceRSNode.output,
+                                                 outputs=[qReshape.output[0]+'_new_transpose_%d'%ids],
+                                                 perm=[3, 1, 0, 2])
+            f2wTPNodesList.append(qSliceTPNode)
+            kqConvNode = onnx.helper.make_node(name=kqMatMul.name+'_toConv_%d'%ids,
+                                               op_type='Conv',
+                                               inputs=[kSliceNode.output[0], qSliceTPNode.output[0]],
+                                               outputs=[kqMatMul.output[0]+'_slice_%d'%ids],
+                                               **newConvAttr)
+            sKQMMNodesList.append(kqConvNode)
+            newKQSoftmaxNode = onnx.helper.make_node(name=kqSoftmax.name+'_new_%d'%ids,
+                                                     op_type='Softmax',
+                                                     inputs=kqConvNode.output,
+                                                     outputs=[kqSoftmax.output[0]+'_new_%d'%ids],
+                                                     axis=newKQSoftmaxAxis)
+            sKQSMNodesList.append(newKQSoftmaxNode)
+            vSliceRSShape = [vSpace, vRSOutShape[-1], 1, 1]
+            vSliceRSShapeTensor = get_initial_by_value(onnx_model, np.array(vSliceRSShape, dtype=np.int64))
+            if vSliceRSShapeTensor is None:
+                vSliceRSShapeTensor = onnx.helper.make_tensor(name=vReshape.input[0]+'_new_%d'%ids,
+                                                              data_type=TensorProto.INT64,
+                                                              dims=[len(vSliceRSShape)],
+                                                              vals=vSliceRSShape)
+                onnx_model.graph.initializer.append(vSliceRSShapeTensor)
+            vSliceRSNode = onnx.helper.make_node(name=vReshape.name+'_new_%d'%ids,
+                                                 op_type='Reshape',
+                                                 inputs=[vSliceNode.output[0], vSliceRSShapeTensor.name],
+                                                 outputs=[vReshape.output[0]+'_slice_%d'%ids])
+            f2wRSNodesList.append(vSliceRSNode)
+            kqvConvNode = onnx.helper.make_node(name=node.name+'_toConv_%d'%ids,
+                                                op_type='Conv',
+                                                inputs=[newKQSoftmaxNode.output[0], vSliceRSNode.output[0]],
+                                                outputs=[node.output[0]+'_slice_%d'%ids],
+                                                **newConvAttr)
+            sKQVMMNodesList.append(kqvConvNode)
+            concatInputs.append(kqvConvNode.output[0])
+            sliceKQStart = sliceKQEnd
+            sliceVStart = sliceVEnd
+            sliceKQStartTensor = sliceKQEndTensor
+            sliceVStartTensor = sliceVEndTensor
+        newConcatNode = onnx.helper.make_node(name=node.name+'_newConcat',
+                                              op_type='Concat',
+                                              inputs=concatInputs,
+                                              outputs=[node.output[0]+'_newConcatOut'],
+                                              axis=1)
+        newConcatShape = vConvOutShape[:2] + kConvOutShape[2:]
+        kqvOutShape = get_shape_by_name(onnx_model, node.output[0])
+        kqvOutNodesList = get_node_by_input(onnx_model, node.output)
+        if not (len(kqvOutNodesList) == 1 and kqvOutNodesList[0].op_type == 'Reshape'):
+            lastRSShapeTensor = get_initial_by_value(onnx_model, np.array(kqvOutShape, dtype=np.int64))
+            if lastRSShapeTensor is None:
+                lastRSShapeTensor = onnx.helper.make_tensor(name=node.output[0]+'_shape',
+                                                            data_type=TensorProto.INT64,
+                                                            dims=[len(kqvOutShape)],
+                                                            vals=kqvOutShape)
+                onnx_model.graph.initializer.append(lastRSShapeTensor)
+            lastRSNode = onnx.helper.make_node(name=node.name+'_lastReshape',
+                                            op_type='Reshape',
+                                            inputs=[newConcatNode.output[0], lastRSShapeTensor.name],
+                                            outputs=node.output)
+            onnx_model.graph.node.insert(node_index, lastRSNode)
+        else:
+            kqvRSOutShape = get_shape_by_name(onnx_model, kqvOutNodesList[0].output[0])
+            onnx_model = delete_value_info_by_name(onnx_model, node.output[0])
+            if kqvRSOutShape == newConcatShape:
+                newConcatNode.output[0] = kqvOutNodesList[0].output[0]
+                onnx_model.graph.node.remove(kqvOutNodesList[0])
+            else:
+                newConcatNode.output[0] = node.output[0]
+                newOutValue = onnx.helper.make_tensor_value_info(node.output[0], 1, newConcatShape)
+                onnx_model.graph.value_info.append(newOutValue)
+        onnx_model.graph.node.insert(node_index, newConcatNode)
+        sKQVMMNodesList.reverse()
+        onnx_model = insert_node_by_list(onnx_model, sKQVMMNodesList, node_index)
+        sKQSMNodesList.reverse()
+        onnx_model = insert_node_by_list(onnx_model, sKQSMNodesList, node_index)
+        sKQMMNodesList.reverse()
+        onnx_model = insert_node_by_list(onnx_model, sKQMMNodesList, node_index)
+        f2wTPNodesList.reverse()
+        onnx_model = insert_node_by_list(onnx_model, f2wTPNodesList, node_index)
+        f2wRSNodesList.reverse()
+        onnx_model = insert_node_by_list(onnx_model, f2wRSNodesList, node_index)
+        sliceNodesList.reverse()
+        onnx_model = insert_node_by_list(onnx_model, sliceNodesList, node_index)
+        delNodesList = [kReshape, kTranspose, qReshape, kqMatMul, kqSoftmax, kqTranspose, vReshape]
+        for valueNode in delNodesList:
+            onnx_model = delete_value_info_by_name(onnx_model, valueNode.output[0])
+        onnx_model = delete_nodes(onnx_model, delNodesList+[node])
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
     return onnx_model, False

@@ -417,7 +417,7 @@ def opt_fusionConvConvAdd(onnx_model, node, node_index):
         if find_init_by_name(onnx_model, addOtherInput):
             return onnx_model, False
         rightConvNode = get_node_by_output(onnx_model, addOtherInput)
-        if rightConvNode.op_type != 'Conv':
+        if rightConvNode is None or rightConvNode.op_type != 'Conv':
             return onnx_model, False
         lCNodeOShape = get_shape_by_name(onnx_model, leftConvNode.output[0])
         rCNodeOShape = get_shape_by_name(onnx_model, addOtherInput)
@@ -1502,6 +1502,7 @@ def opt_convertConcatNxSliceAddToNxAdd(onnx_model, node, node_index):
             if len(addOutShape) != 4:
                 return onnx_model, False
             inNodes = [get_node_by_output(onnx_model, input_name) for input_name in node.input]
+            inNodes = [in_node for in_node in inNodes if in_node is not None]
             concatNodes = [in_node for in_node in inNodes if in_node.op_type == 'Concat']
             if inNodes != concatNodes:
                 return onnx_model, False
@@ -1580,5 +1581,30 @@ def opt_convertConcatNxSliceAddToNxAdd(onnx_model, node, node_index):
             onnx_model = delete_useless_input_in_initializer(onnx_model)
             return onnx_model, True
         else:
+            return onnx_model, False
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionReshapeReshape(onnx_model, node, node_index):
+    if check_node_serial_group(onnx_model, node, ['Reshape', 'Reshape']):
+        topRSNode, botRSNode = get_node_serial_group(onnx_model, node, ['Reshape', 'Reshape'])
+        return onnx_model, True
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_deleteUselessReshape(onnx_model, node, node_index):
+    if node.op_type == 'Reshape':
+        inShape = get_shape_by_name(onnx_model, node.input[0])
+        outShape = get_shape_by_name(onnx_model, node.output[0])
+        if inShape == outShape:
+            outNodesList = get_node_by_input(onnx_model, node.output)
+            for outNode in outNodesList:
+                for idx, outNodeInput in enumerate(outNode.input):
+                    outNode.input[idx] = node.input[0] if outNodeInput == node.output[0] else outNodeInput
+            onnx_model = delete_value_info_by_name(onnx_model, node.output[0])
+            onnx_model = delete_nodes(onnx_model, [node])
+            onnx_model = delete_useless_input_in_initializer(onnx_model)
+            return onnx_model, True
+        else:        
             return onnx_model, False
     return onnx_model, False

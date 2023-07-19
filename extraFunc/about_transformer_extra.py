@@ -233,3 +233,44 @@ def get_vit_kqv_block_nodes(onnx_model, node):
         'v_serial': [vReshape]
     }
     return reNodesDict
+
+def get_custom_three_conv_kqv_block_nodes(onnx_model, node):
+    if node.op_type != 'MatMul':
+        return None
+    vReshape = get_node_by_output(onnx_model, node.input[0])
+    if vReshape is None or vReshape.op_type != 'Reshape':
+        return None
+    vConv = get_node_by_output(onnx_model, vReshape.input[0])
+    if vConv is None or vConv.op_type != 'Conv':
+        return None
+    kqTranspose = get_node_by_output(onnx_model, node.input[1])
+    if kqTranspose is None or kqTranspose.op_type != 'Transpose':
+        return None
+    kqSoftmax = get_node_by_output(onnx_model, kqTranspose.input[0])
+    if kqSoftmax is None or kqSoftmax.op_type != 'Softmax':
+        return None
+    kqMatMul = get_node_by_output(onnx_model, kqSoftmax.input[0])
+    if kqMatMul is None or kqMatMul.op_type != 'MatMul':
+        return None
+    kTranspose = get_node_by_output(onnx_model, kqMatMul.input[0])
+    if kTranspose is None or kTranspose.op_type != 'Transpose':
+        return None
+    kReshape = get_node_by_output(onnx_model, kTranspose.input[0])
+    if kReshape is None or kReshape.op_type != 'Reshape':
+        return None
+    kConv = get_node_by_output(onnx_model, kReshape.input[0])
+    if kConv is None or kConv.op_type != 'Conv':
+        return None
+    qReshape = get_node_by_output(onnx_model, kqMatMul.input[1])
+    if qReshape is None or qReshape.op_type != 'Reshape':
+        return None
+    qConv = get_node_by_output(onnx_model, qReshape.input[0])
+    if qConv is None or qConv.op_type != 'Conv':
+        return None
+    reNodesDict = {
+        'k_serial': [kConv, kReshape, kTranspose],
+        'q_serial': [qConv, qReshape],
+        'kq_serial': [kqMatMul, kqSoftmax, kqTranspose],
+        'v_serial': [vConv, vReshape]
+    }
+    return reNodesDict
