@@ -114,6 +114,14 @@ def delete_useless_inputOfModel(onnx_model):
     del onnx_modelCp
     return onnx_model
 
+def delete_useless_outputOfModel(onnx_model):
+    modelOutputCp = copy.deepcopy(onnx_model.graph.output)
+    for output in modelOutputCp:
+        if get_node_by_output(onnx_model, output.name) is None:
+            onnx_model.graph.output.remove(output)
+    del modelOutputCp
+    return onnx_model
+
 def get_dtype_by_name(onnx_model, name):
     graph_input = onnx_model.graph.input
     for value in graph_input:
@@ -336,7 +344,8 @@ def get_last_node_by_serial(onnx_model, serial_list):
 def get_initial_by_value(onnx_model, src_tensor: np.array):
     for initial in onnx_model.graph.initializer:
         init_tensor = onnx.numpy_helper.to_array(initial)
-        if np.array((init_tensor == src_tensor), dtype=np.bool8).all():
+        if init_tensor.shape == src_tensor.shape and \
+            np.array((init_tensor == src_tensor), dtype=np.bool8).all():
             return initial
     return None
 

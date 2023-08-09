@@ -64,38 +64,48 @@ def model_preprocess(onnx_model):
     return onnx_model   
 
 class OnnxConvertOptimizer(object):
-    def __init__(self, onnx_model, debug_mode):
+    def __init__(self, onnx_model, debug_mode, save_path='./result.onnx'):
         self.onnx_model = onnx_model
         self.debug_mode = debug_mode
+        self.save_path = save_path
     
     #@classmethod
     def opt(self):
         OnnxDebuggerMeet.set_debug_mode(self.debug_mode)
         OnnxDebuggerMeet.get_opset_version(self.onnx_model)
+        OnnxDebuggerMeet.get_save_path(self.save_path)
+        
         
         self.onnx_model = opt_deleteGatherInput(self.onnx_model)
         self.onnx_model = opt_mulReplaceWhereBoolInput(self.onnx_model)
+        self.onnx_model = opt_deleteUselessReshapeSlice(self.onnx_model)
+
+        self.onnx_model = opt_deleteUnsqueezeCastLessNotUnSqueezeNotSliceSliceForInput(self.onnx_model)
+        self.onnx_model = opt_deleteSqueezeCastReduceSumCastForOutput(self.onnx_model)
+        self.onnx_model = opt_replaceInputSqueezeCastEqueezeWhereOrNotWhereWithMul(self.onnx_model)
         if self.onnx_model.opset_import[0].version >= 17:
             self.onnx_model = opt_fusionSeparatedLayerNormal(self.onnx_model)
-        self.onnx_model = opt_deleteUselessReshape(self.onnx_model)
         self.onnx_model = opt_fusionMultiMulDiv(self.onnx_model)
         self.onnx_model = opt_replaceDivByMul(self.onnx_model)
         self.onnx_model = opt_fusionMultiSubReduceMean(self.onnx_model)
+        self.onnx_model = opt_convertConv1DTo2D(self.onnx_model)
+        self.onnx_model = opt_convertMultiKMultiHeadAttentionKQV(self.onnx_model)
         self.onnx_model = opt_convert3dimMultiAttentionKQVTo4dim(self.onnx_model)
         self.onnx_model = opt_splitMatMulQK2DynamicConv(self.onnx_model)
         self.onnx_model = opt_splitVxSoftmax2DynamicConv(self.onnx_model)
         self.onnx_model = opt_3dimMultiAttentionxWto4dimConv(self.onnx_model)
         self.onnx_model = opt_fusionTransposeTranspose(self.onnx_model)
         self.onnx_model = opt_fusionMultiBranchReshapeTranspose(self.onnx_model)
-        self.onnx_model = opt_3dimResidualAddTo4dim(self.onnx_model)
         self.onnx_model = opt_3dimFeedForwardTo4dim(self.onnx_model)
+        self.onnx_model = opt_convertCalculateTransposeReshapeMul(self.onnx_model)
+        self.onnx_model = opt_3dimResidualAddTo4dim(self.onnx_model)
         self.onnx_model = opt_transposeReshape3dimAddTo4dimAdd(self.onnx_model)
         self.onnx_model = opt_3dimLayerNormalTo4dim(self.onnx_model)
+        self.onnx_model = opt_convert3DimTransposeXReshapeOrReshapeXTransposeXMulOrAdd(self.onnx_model)
+        #self.onnx_model = opt_convert3DimReshapeMulOrAddTranspose(self.onnx_model)
         self.onnx_model = opt_fusionMaskMulTranspose(self.onnx_model)
         self.onnx_model = opt_moveForwardInputReshapeTranspose(self.onnx_model)
-        self.onnx_model = opt_fusionInputTranspose(self.onnx_model)
         self.onnx_model = opt_fusionTransposeReshapeReshapeTranspose(self.onnx_model)
-        self.onnx_model = opt_3dimInputReshapeTo4dim(self.onnx_model)
         self.onnx_model = opt_fusionConvConvAdd(self.onnx_model)
         self.onnx_model = opt_fusionMultiConcat(self.onnx_model)
         
@@ -108,6 +118,16 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_convertMultiBatchReshapeSliceReshapeToOneBatchSliceConcat(self.onnx_model)
         
         self.onnx_model = opt_convertCustomThrConvKQV(self.onnx_model)
+        
+        self.onnx_model = opt_fusionTransposeReshapeSMishReshapeTranspose(self.onnx_model)
+        self.onnx_model = opt_fusionMultiTransposeReshapeXMultiReshapeTranspose(self.onnx_model)
+        self.onnx_model = opt_fusionReshapeSplitSMishReshape(self.onnx_model)
+        self.onnx_model = opt_convertCalculateTransposeReshapeSoftmax(self.onnx_model)
+        self.onnx_model = opt_moveForwardUnsqueeze(self.onnx_model)
+        self.onnx_model = opt_moveForwardTranspose(self.onnx_model)
+        
+        self.onnx_model = opt_3dimInputReshapeTo4dim(self.onnx_model)
+        self.onnx_model = opt_fusionInputTranspose(self.onnx_model)
         
         self.onnx_model = opt_fusionConcatSlice(self.onnx_model)
         self.onnx_model = opt_convertMSliceConcatNxMSlice(self.onnx_model)

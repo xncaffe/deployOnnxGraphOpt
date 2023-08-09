@@ -267,36 +267,58 @@ def opt_mulReshapeTransposeInputMove(onnx_model):
 
 @OnnxDebuggerMeet.opt_inout_wrapper
 def opt_fusionInputTranspose(onnx_model):
-    for netInput in onnx_model.graph.input:
+    for netIdx, netInput in enumerate(onnx_model.graph.input):
         inputNodesList = get_node_by_input(onnx_model, [netInput.name])
         trNodesList = [inputNode for inputNode in inputNodesList if inputNode.op_type == 'Transpose']
         if not trNodesList:
             continue
         netInShape = get_shape_by_name(onnx_model, netInput.name)
-        trPermDict = {}
-        for trNode in trNodesList:
-            trPerm = attribute_to_dict(trNode.attribute).get('perm', list(range(len(netInShape))).reverse())
-            trPermStr = ''
-            for trPId in trPerm:
-                trPermStr+=str(trPId)
-                trPermStr+='_'
-            if trPermStr not in trPermDict:
-                trPermDict[trPermStr] = []
-            trPermDict[trPermStr].append(trNode)
-        allOneFlag = False
-        for trSPerm in list(trPermDict.keys()):
-            if len(trPermDict[trSPerm]) > 1:
-                for trNode in trPermDict[trSPerm][1:]:
-                    trOutNodesList = get_node_by_input(onnx_model, trNode.output)
-                    for trOutNode in trOutNodesList:
-                        for inId, trOutNodeIn in enumerate(trOutNode.input):
-                            trOutNode.input[inId] = trPermDict[trSPerm][0].output[0] \
-                                if trOutNodeIn == trNode.output[0] else trOutNodeIn
-                    onnx_model = delete_value_info_by_name(onnx_model, trNode.output[0])
-                    onnx_model.graph.node.remove(trNode)
-                allOneFlag = True
-        if not allOneFlag:
-            continue
+        if len(trNodesList) > 1:
+            trPermDict = {}
+            for trNode in trNodesList:
+                trPerm = attribute_to_dict(trNode.attribute).get('perm', list(range(len(netInShape))).reverse())
+                trPermStr = ''
+                for trPId in trPerm:
+                    trPermStr+=str(trPId)
+                    trPermStr+='_'
+                if trPermStr not in trPermDict:
+                    trPermDict[trPermStr] = []
+                trPermDict[trPermStr].append(trNode)
+            allOneFlag = False
+            for trSPerm in list(trPermDict.keys()):
+                if len(trPermDict[trSPerm]) > 1:
+                    for trNode in trPermDict[trSPerm][1:]:
+                        trOutNodesList = get_node_by_input(onnx_model, trNode.output)
+                        for trOutNode in trOutNodesList:
+                            for inId, trOutNodeIn in enumerate(trOutNode.input):
+                                trOutNode.input[inId] = trPermDict[trSPerm][0].output[0] \
+                                    if trOutNodeIn == trNode.output[0] else trOutNodeIn
+                        onnx_model = delete_value_info_by_name(onnx_model, trNode.output[0])
+                        onnx_model.graph.node.remove(trNode)
+                    allOneFlag = True
+            if not allOneFlag:
+                continue
+        else:
+            tpNode = trNodesList[0]
+            tpPerm = attribute_to_dict(tpNode.attribute).get('perm', list(range(len(netInShape))).reverse())
+            tpOutShape = get_shape_by_name(onnx_model, tpNode.output[0])
+            netInputSize = int(np.prod(np.array(tpOutShape, dtype=np.int64)))
+            randArr = np.random.randn(netInputSize)
+            randInArr = np.reshape(randArr, tuple(tpOutShape))
+            randOutArr = np.transpose(randInArr, tuple(tpPerm))
+            if (randInArr.flatten() == randOutArr.flatten()).all():
+                inputDtype = get_dtype_by_name(onnx_model, netInput.name)
+                newNetInputValueInfo = onnx.helper.make_tensor_value_info(netInput.name, inputDtype, tpOutShape)
+                onnx_model.graph.input.remove(netInput)
+                onnx_model.graph.input.insert(netIdx, newNetInputValueInfo)
+                tpOutNodesList = get_node_by_input(onnx_model, tpNode.output)
+                for tpOutNode in tpOutNodesList:
+                    for curIdx, tpOutNodeInput in enumerate(tpOutNode.input):
+                        tpOutNode.input[curIdx] = newNetInputValueInfo.name if tpOutNodeInput == tpNode.output[0] else tpOutNodeInput
+                onnx_model = delete_value_info_by_name(onnx_model, tpNode.output[0])
+                onnx_model.graph.node.remove(tpNode)
+            else:
+                continue
         onnx_model = delete_useless_input_in_initializer(onnx_model)
         return onnx_model, True
     return onnx_model, False
@@ -339,7 +361,7 @@ def opt_deleteInputTranspose(onnx_model):
 
 @OnnxDebuggerMeet.opt_inout_wrapper
 def opt_3dimInputReshapeTo4dim(onnx_model):
-    for netInput in onnx_model.graph.input:
+    for inputId, netInput in enumerate(onnx_model.graph.input):
         netInShape = get_shape_by_name(onnx_model, netInput.name)
         if len(netInShape) != 3:
             continue
@@ -348,29 +370,42 @@ def opt_3dimInputReshapeTo4dim(onnx_model):
         if len(netInNodesList) != len(rsNodesList):
             continue
         rsOutShape = get_shape_by_name(onnx_model, rsNodesList[0].output[0])
-        oneNum = rsOutShape.count(1)
-        delRsFlag = False
-        if len(rsNodesList) > 1 or len(rsOutShape) != 4 or oneNum != 2:
-            netInShape.append(1)
+        if len(rsNodesList) > 1:
+            oneNum = rsOutShape.count(1)
+            delRsFlag = False
+            if len(rsNodesList) > 1 or len(rsOutShape) != 4 or oneNum != 2:
+                netInShape.append(1)
+            else:
+                firIndex = rsOutShape.index(1)
+                secIndex = rsOutShape.index(1, firIndex+1)
+                netInShape.insert(secIndex, 1)
+                delRsFlag = True
+            newNetInValue = onnx.helper.make_tensor_value_info(netInput.name+'_new', netInput.type.tensor_type.elem_type, netInShape)
+            onnx_model.graph.input.append(newNetInValue)
+            if delRsFlag:
+                rsOutNodesList = get_node_by_input(onnx_model, rsNodesList[0].output)
+                for rsOutNode in rsOutNodesList:
+                    for inId, rsOutNodeIn in enumerate(rsOutNode.input):
+                        rsOutNode.input[inId] = newNetInValue.name if rsOutNodeIn == rsNodesList[0].output[0] else rsOutNodeIn
+                onnx_model = delete_value_info_by_name(onnx_model, rsNodesList[0].output[0])
+                onnx_model.graph.node.remove(rsNodesList[0])
+                onnx_model = delete_useless_input_in_initializer(onnx_model)
+            else:
+                for rsNode in rsNodesList:
+                    rsNode.input[0] = newNetInValue.name
+            onnx_model = delete_useless_inputOfModel(onnx_model)
         else:
-            firIndex = rsOutShape.index(1)
-            secIndex = rsOutShape.index(1, firIndex+1)
-            netInShape.insert(secIndex, 1)
-            delRsFlag = True
-        newNetInValue = onnx.helper.make_tensor_value_info(netInput.name+'_new', netInput.type.tensor_type.elem_type, netInShape)
-        onnx_model.graph.input.append(newNetInValue)
-        if delRsFlag:
+            netInDtype = get_dtype_by_name(onnx_model, netInput.name)
+            newNetShapeValueInfo = onnx.helper.make_tensor_value_info(netInput.name, netInDtype, rsOutShape)
+            onnx_model.graph.input.remove(netInput)
+            onnx_model.graph.input.insert(inputId, newNetShapeValueInfo)
             rsOutNodesList = get_node_by_input(onnx_model, rsNodesList[0].output)
             for rsOutNode in rsOutNodesList:
-                for inId, rsOutNodeIn in enumerate(rsOutNode.input):
-                    rsOutNode.input[inId] = newNetInValue.name if rsOutNodeIn == rsNodesList[0].output[0] else rsOutNodeIn
+                for curIdx, rsOutNodeInput in enumerate(rsOutNode.input):
+                    rsOutNode.input[curIdx] = newNetShapeValueInfo.name if rsOutNodeInput == rsNodesList[0].output[0] else rsOutNodeInput
             onnx_model = delete_value_info_by_name(onnx_model, rsNodesList[0].output[0])
             onnx_model.graph.node.remove(rsNodesList[0])
             onnx_model = delete_useless_input_in_initializer(onnx_model)
-        else:
-            for rsNode in rsNodesList:
-                rsNode.input[0] = newNetInValue.name
-        onnx_model = delete_useless_inputOfModel(onnx_model)
         return onnx_model, True
     return onnx_model, False
 
@@ -395,7 +430,7 @@ def opt_convertInputW1ToH1(onnx_model):
     onnx_model_new = copy.deepcopy(onnx_model)
     for idx, netInput in enumerate(onnx_model_new.graph.input):
         netInShape = get_shape_by_name(onnx_model_new, netInput.name)
-        if len(netInShape) != 4 or netInShape[-1] != 1:
+        if len(netInShape) != 4 or netInShape[-1] != 1 or netInShape[-1] == netInShape[-2]:
             continue
         newInShape = netInShape[:2] + [netInShape[-1], netInShape[2]]
         newNetInput = onnx.helper.make_tensor_value_info(netInput.name, netInput.type.tensor_type.elem_type, newInShape)
@@ -426,3 +461,216 @@ def opt_convertInputW1ToH1(onnx_model):
         else:
             continue
     return onnx_model, False
+
+@OnnxDebuggerMeet.opt_inout_wrapper
+def opt_deleteUnsqueezeCastLessNotUnSqueezeNotSliceSliceForInput(onnx_model):
+    for idx, netInput in enumerate(onnx_model.graph.input):
+        inNodesList = get_node_by_input(onnx_model, [netInput.name])
+        if len(inNodesList) != 1 or inNodesList[0].op_type != 'Unsqueeze':
+            continue
+        topUnsqueeze = inNodesList[0]
+        op_patch_list = ['Unsqueeze', 'Cast', 'Less', 'Not', 'Unsqueeze', 'Not', 'Slice', 'Slice']
+        if check_node_serial_group(onnx_model, topUnsqueeze, op_patch_list):
+            serial_nodes = get_node_serial_group(onnx_model, topUnsqueeze, op_patch_list)
+            botSlice = serial_nodes[-1]
+            botSliceOutType = get_dtype_by_name(onnx_model, botSlice.output[0])
+            botSliceOutShape = get_shape_by_name(onnx_model, botSlice.output[0])
+            newInput = onnx.helper.make_tensor_value_info(netInput.name, botSliceOutType, botSliceOutShape)
+            onnx_model.graph.input.remove(netInput)
+            onnx_model.graph.input.insert(idx, newInput)
+            outNodesList = get_node_by_input(onnx_model, serial_nodes[-1].output)
+            for outNode in outNodesList:
+                for in_id, outNodeIn in enumerate(outNode.input):
+                    outNode.input[in_id] = newInput.name if outNodeIn == botSlice.output[0] else outNodeIn
+            serial_nodes.reverse()
+            for cur_node in serial_nodes:
+                curOutNodesList = get_node_by_input(onnx_model, cur_node.output)
+                if not curOutNodesList:
+                    onnx_model = delete_value_info_by_name(onnx_model, cur_node.output[0])
+                    onnx_model.graph.node.remove(cur_node)
+            onnx_model = delete_useless_input_in_initializer(onnx_model)
+            return onnx_model, True
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_inout_wrapper
+def opt_deleteSqueezeCastReduceSumCastForOutput(onnx_model):
+    for idx, netOutput in enumerate(onnx_model.graph.output):
+        botCastNode = get_node_by_output(onnx_model, netOutput.name)
+        if botCastNode.op_type != 'Cast':
+            continue
+        botCastOutNodes = get_node_by_input(onnx_model, botCastNode.output)
+        reduceSumNode = get_node_by_output(onnx_model, botCastNode.input[0])
+        if reduceSumNode is None:
+            if not botCastOutNodes:
+                onnx_model.graph.node.remove(botCastNode)
+            onnx_model.graph.output.remove(netOutput)
+            onnx_model = delete_useless_input_in_initializer(onnx_model)
+            return onnx_model, True
+        reduceSumOutType = get_dtype_by_name(onnx_model, reduceSumNode.output[0])
+        if reduceSumNode.op_type != 'ReduceSum':
+            if reduceSumOutType != 1:
+                continue
+            if not botCastOutNodes:
+                onnx_model.graph.node.remove(botCastNode)
+            newNetOut = onnx.helper.make_tensor_value_info(reduceSumNode.output[0], reduceSumOutType, 
+                                                           get_shape_by_name(onnx_model, reduceSumNode.output[0]))
+            onnx_model.graph.output.remove(netOutput)
+            onnx_model.graph.output.insert(idx, newNetOut)
+            onnx_model = delete_useless_input_in_initializer(onnx_model)
+            return onnx_model, True
+        else:
+            topCastNode = get_node_by_output(onnx_model, reduceSumNode.input[0])
+            reduceSumOutNodes = get_node_by_output(onnx_model, reduceSumNode.output)
+            if topCastNode is None:
+                if reduceSumOutType != 1:
+                    if not botCastOutNodes:
+                        onnx_model.graph.node.remove(botCastNode)
+                        if len(reduceSumOutNodes) == 1:
+                            onnx_model.graph.node.remove(reduceSumNode)
+                            onnx_model = delete_value_info_by_name(onnx_model, reduceSumNode.output[0])
+                    onnx_model.graph.output.remove(netOutput)
+                    onnx_model = delete_useless_input_in_initializer(onnx_model)
+                    return onnx_model, True
+                else:
+                    if not botCastOutNodes:
+                        onnx_model.graph.node.remove(botCastNode)
+                    newNetOut = onnx.helper.make_tensor_value_info(reduceSumNode.output[0], reduceSumOutType, 
+                                                                   get_shape_by_name(onnx_model, reduceSumNode.output[0]))
+                    onnx_model.graph.output.remove(netOutput) 
+                    onnx_model.graph.output.insert(idx, newNetOut)
+                    onnx_model = delete_useless_input_in_initializer(onnx_model)
+                    return onnx_model, True
+            topCastOutType = get_shape_by_name(onnx_model, topCastNode.output[0])
+            if topCastNode.op_type != 'Cast':
+                if topCastOutType != 1:
+                    continue
+                if not botCastOutNodes:
+                    onnx_model.graph.node.remove(botCastNode)
+                newNetOut = onnx.helper.make_tensor_value_info(topCastNode.output[0], topCastOutType, 
+                                                               get_shape_by_name(onnx_model, reduceSumNode.output[0]))
+                onnx_model.graph.output.remove(netOutput)
+                onnx_model.graph.output.insert(idx, newNetOut)
+            else:
+                squeezeNode = get_node_by_output(onnx_model, topCastNode.input[0])
+                topCastOutNodes = get_node_by_input(onnx_model, topCastNode.output)
+                squeezeOutType = get_dtype_by_name(onnx_model, squeezeNode.output[0])
+                if squeezeNode is None or squeezeNode.op_type != 'Squeeze':
+                    if not botCastOutNodes:
+                        onnx_model = delete_value_info_by_name(onnx_model, botCastNode.output[0])
+                        onnx_model.graph.node.remove(botCastNode)
+                        if len(reduceSumOutNodes) == 1:
+                            onnx_model = delete_value_info_by_name(onnx_model, reduceSumNode.output[0])
+                            onnx_model.graph.node.remove(reduceSumNode)
+                            if len(topCastOutNodes) == 1:
+                                onnx_model = delete_value_info_by_name(onnx_model, topCastNode.output[0])
+                                onnx_model.graph.node.remove(topCastNode)
+                    onnx_model.graph.output.remove(netOutput)
+                    if squeezeNode.op_type != 'Squeeze':
+                        newNetOut = onnx.helper.make_tensor_value_info(squeezeNode.output[0], squeezeOutType, 
+                                                                       get_shape_by_name(onnx_model, squeezeNode.output[0]))
+                        onnx_model.graph.output.insert(idx, newNetOut)
+                    onnx_model = delete_useless_input_in_initializer(onnx_model)
+                    return onnx_model, True
+                else:
+                    firstNode = get_node_by_output(onnx_model, squeezeNode.input[0])
+                    for cur_node in [botCastNode, reduceSumNode, topCastNode, squeezeNode]:
+                        curOutNodes = get_node_by_input(onnx_model, cur_node.output)
+                        if not curOutNodes:
+                            onnx_model = delete_value_info_by_name(onnx_model, cur_node.output[0])
+                            onnx_model.graph.node.remove(cur_node)
+                    onnx_model.graph.output.remove(netOutput)
+                    if firstNode is not None:
+                        newNetOut = onnx.helper.make_tensor_value_info(firstNode.output[0],
+                                                                       get_dtype_by_name(onnx_model, firstNode.output[0]),
+                                                                       get_shape_by_name(onnx_model, firstNode.output[0]))
+                        onnx_model.graph.output.insert(idx, newNetOut)
+                    onnx_model = delete_useless_input_in_initializer(onnx_model)
+                    return onnx_model, True
+    return onnx_model, False
+                                
+@OnnxDebuggerMeet.opt_inout_wrapper
+def opt_replaceInputSqueezeCastEqueezeWhereOrNotWhereWithMul(onnx_model):                  
+    for idx, netInput in enumerate(onnx_model.graph.input):
+        serial_nodes = get_node_by_input(onnx_model, [netInput.name])
+        unsqueezeNodesList = [cur_node for cur_node in serial_nodes if cur_node.op_type == 'Unsqueeze']
+        notNodesList = [cur_node for cur_node in serial_nodes if cur_node.op_type == 'Not']
+        notNodesListCp = copy.deepcopy(notNodesList)
+        for not_id, notNode in enumerate(notNodesListCp):
+            notOutNodesList = get_node_by_input(onnx_model, notNode.output)
+            notWhereNodesList = [cur_node for cur_node in notOutNodesList if cur_node.op_type == 'Where' 
+                                 and (find_init_by_name(onnx_model, cur_node.input[1]) 
+                                      or find_init_by_name(onnx_model, cur_node.input[2]))]
+            if not notWhereNodesList:
+                continue
+            if not_id == 0:
+                newNotInput = onnx.helper.make_tensor_value_info(netInput.name+'_notwhere2mul', 1,
+                                                                 get_shape_by_name(onnx_model, notNode.output[0]))
+                onnx_model.graph.input.insert(idx, newNotInput)
+            for notWhereNode in notWhereNodesList:
+                notDyInput = notWhereNode.input[2] \
+                    if find_init_by_name(onnx_model, notWhereNode.input[1]) else notWhereNode.input[1]
+                newNotMul = onnx.helper.make_node(name=notWhereNode.name,
+                                                  op_type='Mul',
+                                                  inputs=[notDyInput, netInput.name+'_notwhere2mul'],
+                                                  outputs=notWhereNode.output)
+                notWhereId = get_node_id(onnx_model, notWhereNode)
+                onnx_model.graph.node.remove(notWhereNode)
+                onnx_model.graph.node.insert(notWhereId, newNotMul)
+            if len(notOutNodesList) == len(notWhereNodesList):
+                onnx_model = delete_value_info_by_name(onnx_model, notNode.output[0])
+                onnx_model.graph.node.remove(notNode)
+        unsqueezeNodesListCp = copy.deepcopy(unsqueezeNodesList)
+        for unsqueeze_id, unsqueezeNode in enumerate(unsqueezeNodesListCp):
+            unsqueezeOutNodesList = get_node_by_input(onnx_model, unsqueezeNode.output)
+            unsqueezeCastNodesList = [cur_node for cur_node in unsqueezeOutNodesList if cur_node.op_type == 'Cast']
+            unsqueezeEqualNodesList = [cur_node for cur_node in unsqueezeOutNodesList if cur_node.op_type == 'Equal']
+            unsqueezeWhereNodesList = []
+            for castNode in unsqueezeCastNodesList:
+                castOutNodesList = get_node_by_input(onnx_model, castNode.output)
+                for castOutNode in castOutNodesList:
+                    if castOutNode.op_type == 'Equal' and castOutNode not in unsqueezeEqualNodesList:
+                        unsqueezeEqualNodesList.append(castOutNode)
+            for equalNode in unsqueezeEqualNodesList:
+                equalOutNodesList = get_node_by_input(onnx_model, equalNode.output)
+                for equalOutNode in equalOutNodesList:
+                    if equalOutNode.op_type == 'Where' and \
+                        (find_init_by_name(onnx_model, equalOutNode.input[1]) \
+                            or find_init_by_name(onnx_model, equalOutNode.input[2])) \
+                                and equalOutNode not in unsqueezeWhereNodesList:
+                        unsqueezeWhereNodesList.append(equalOutNode)
+            if not unsqueezeWhereNodesList:
+                continue
+            if unsqueeze_id == 0:
+                newSqueezeInput = onnx.helper.make_tensor_value_info(netInput.name+'_unsqueezecastequalwhere2mul', 1,
+                                                                 get_shape_by_name(onnx_model, unsqueezeWhereNodesList[0].input[0]))
+                onnx_model.graph.input.insert(idx, newSqueezeInput)
+            for whereNode in unsqueezeWhereNodesList:
+                unsqueezeDyInput = whereNode.input[2] if find_init_by_name(onnx_model, whereNode.input[1]) else whereNode.input[1]
+                newUnsqueezeMul = onnx.helper.make_node(name=whereNode.name,
+                                                        op_type='Mul',
+                                                        inputs=[unsqueezeDyInput, netInput.name+'_unsqueezecastequalwhere2mul'],
+                                                        outputs=whereNode.output)
+                where_id = get_node_id(onnx_model, whereNode)
+                onnx_model.graph.node.remove(whereNode)
+                onnx_model.graph.node.insert(where_id, newUnsqueezeMul)
+            for curEqualNode in unsqueezeEqualNodesList:
+                curEqualOutNodes = get_node_by_input(onnx_model, curEqualNode.output)
+                if not curEqualOutNodes:
+                    onnx_model = delete_value_info_by_name(onnx_model, curEqualNode.output[0])
+                    onnx_model.graph.node.remove(curEqualNode)
+            for curCastNode in unsqueezeCastNodesList:
+                curCastOutNodes = get_node_by_input(onnx_model, curCastNode.output)
+                if not curCastOutNodes:
+                    onnx_model = delete_value_info_by_name(onnx_model, curCastNode.output[0])
+                    onnx_model.graph.node.remove(curCastNode)
+            lastNetOutNodes = get_node_by_input(onnx_model, unsqueezeNode.output)
+            if not lastNetOutNodes:
+                onnx_model = delete_value_info_by_name(onnx_model, unsqueezeNode.output[0])
+                onnx_model.graph.node.remove(unsqueezeNode)
+        last_serial_nodes = get_node_by_input(onnx_model, [netInput.name])
+        if len(last_serial_nodes) != len(serial_nodes):
+            if not last_serial_nodes: onnx_model.graph.input.remove(netInput)
+            onnx_model = delete_useless_input_in_initializer(onnx_model)
+            return onnx_model, True
+    return onnx_model, False
+        

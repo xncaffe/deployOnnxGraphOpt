@@ -9,8 +9,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--input_model", type=str, default="/workspace/nxu/project/Transformer/annotated-transformer/annatatedTransformer-multi30k.onnx", help="input onnx model path")
-    parser.add_argument("-o", "--output_model", type=str, default="/workspace/nxu/project/Transformer/annotated-transformer/annatatedTransformer-multi30k-opt.onnx", help="output onnx model path")
+    parser.add_argument("-i", "--input_model", type=str, default="/workspace/nxu/customer/gelingshentong/20230717/encoder_new.onnx", help="input onnx model path")
+    parser.add_argument("-o", "--output_model", type=str, default="/workspace/nxu/customer/gelingshentong/20230717/encoder_new_preopt.onnx", help="output onnx model path")
     parser.add_argument("-v", "--convert_opset", type=int, default=11, help="whether to convert opset version")
     parser.add_argument("--debug", action='store_true', help="run mode is debug or release, defualt release")
     args = parser.parse_args()
@@ -18,6 +18,7 @@ def parse_args():
 
 def main(args):
     dstOptSetVer = args.convert_opset
+    args.debug = True
     srcPath = args.input_model
     dstPath = args.output_model
     debug_mode = 'debug' if args.debug else 'release'
@@ -28,13 +29,15 @@ def main(args):
     onnx_model = onnx.load_model(srcPath)
     if dstOptSetVer and onnx_model.opset_import[0].version != dstOptSetVer:
         onnx_model = onnx.version_converter.convert_version(onnx_model, dstOptSetVer)
+    onnx_model.ir_version = 7 if onnx_model.ir_version > 7 else onnx_model.ir_version
     onnx_model = model_preprocess(onnx_model)
+    #model.opset_import.extend([onnx.helper.make_opsetid('art.custom.add', 1)])
 
     '''
     Explanation run opt
     '''
     logger = logging.getLogger("[OPTPROC]")
-    clsOpt = OnnxConvertOptimizer(onnx_model=onnx_model, debug_mode=debug_mode)
+    clsOpt = OnnxConvertOptimizer(onnx_model=onnx_model, debug_mode=debug_mode, save_path=dstPath)
     logger.info("Start run opt ... ")
     onnx_model = clsOpt.opt()
     logger.info("Opt finish!")
