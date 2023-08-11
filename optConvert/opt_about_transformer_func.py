@@ -1495,6 +1495,10 @@ def opt_3dimLayerNormalTo4dim(onnx_model, node, node_index):
                                           outputs=[node.output[0]])
         node.output[0] = node.output[0] + '_new'
         onnx_model = insert_node_by_list(onnx_model, [newRSNode, newTPNode], node_index+1)
+        newTPOutValueInfo = onnx.helper.make_tensor_value_info(newTPNode.output[0], 1, topTPOutShape)
+        newRSOutValueInfo = onnx.helper.make_tensor_value_info(newRSNode.output[0], 1, topRSOutShape)
+        onnx_model.graph.value_info.append(newTPOutValueInfo)
+        onnx_model.graph.value_info.append(newRSOutValueInfo)
         lnNodesDicts['topReduceMean'].input[0] = topTPNode.input[0]
         lnNodesDicts['sub'].input[0] = topTPNode.input[0]
         if not get_node_by_input(onnx_model, topRSNode.output):
@@ -1631,6 +1635,10 @@ def opt_3dimLayerNormalTo4dim(onnx_model, node, node_index):
                                           inputs=[newRSNode.output[0]],
                                           outputs=[lnNodesDicts['sub'].input[0]+'_transpose'],
                                           perm=botTPPerm)
+        newRSValueInfo = onnx.helper.make_tensor_value_info(newRSNode.output[0], 1, botRSOutShape)
+        newTPValueInfo = onnx.helper.make_tensor_value_info(newTPNode.output[0], 1, botTPOutShape)
+        onnx_model.graph.value_info.append(newRSValueInfo)
+        onnx_model.graph.value_info.append(newTPValueInfo)
         min_node_id = len(onnx_model.graph.node) + 1
         for set_node in [lnNodesDicts['sub'], lnNodesDicts['topReduceMean']]:
             cur_id = get_node_id(onnx_model, set_node)
@@ -1661,6 +1669,12 @@ def opt_3dimLayerNormalTo4dim(onnx_model, node, node_index):
                                                  outputs=[node.output[0]])
             newBotInSertNodesList.append(newBotRSNode)
             newBotInSertNodesList.append(newBotTPNode)
+            newBotOutShape = [botTPOutShape[idx] for idx in newBotPerm]
+            newBotTPValueInfo = onnx.helper.make_tensor_value_info(newBotTPNode.output[0], 1, newBotOutShape)
+            onnx_model.graph.value_info.append(newBotTPValueInfo)
+            if node.output[0] not in lyOutNamesList:
+                newBotRSValueInfo = onnx.helper.make_tensor_value_info(newBotRSNode.output[0], 1, lnInputShape)
+                onnx_model.graph.value_info.append(newBotRSValueInfo)
         node.output[0] = botTPNode.output[0]
         onnx_model = delete_nodes(onnx_model, [botRSNode, botTPNode])
         onnx_model = insert_node_by_list(onnx_model, newBotInSertNodesList, node_index+1)

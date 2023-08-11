@@ -181,8 +181,9 @@ def get_layernormal_node_dict(onnx_model, addNode):
         if not find_init_by_name(onnx_model, botMulStInput):
             return None
         divNode = get_node_by_output(onnx_model, botMulDyInput)
-        if find_init_by_name(onnx_model, divNode.input[0]) or find_init_by_name(onnx_model, divNode.input[1]):
-            return None
+        if divNode is None or \
+            find_init_by_name(onnx_model, divNode.input[0]) or find_init_by_name(onnx_model, divNode.input[1]):
+                return None
         leftSubNode = get_node_by_output(onnx_model, divNode.input[0])
         if leftSubNode.op_type != 'Sub':
             return None

@@ -61,7 +61,7 @@ class OnnxDebuggerMeet(object):
                                 elif func.__name__ not in OnnxDebuggerMeet.GENERAL_SCREEN_FUNC:
                                     check_opt_precision(onnx_model_old, onnx_model, func.__name__)      
                                 onnx_model_old = copy.deepcopy(onnx_model)
-                            print('')
+                                print('')
                             break
                 if not restart and do_opt:
                     if OnnxDebuggerMeet.debug_mode == 'release':
@@ -70,6 +70,7 @@ class OnnxDebuggerMeet(object):
                             check_opt_precision(onnx_model_old, onnx_model, func.__name__) 
                         elif func.__name__ not in OnnxDebuggerMeet.GENERAL_SCREEN_FUNC:
                             check_opt_precision(onnx_model_old, onnx_model, func.__name__)
+                        print('')
             except Exception as e:
                 debug_path = OnnxDebuggerMeet.save_path[:-5] + '-debug.onnx'
                 onnx.save_model(onnx_model, debug_path)

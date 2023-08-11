@@ -19,6 +19,7 @@ def opt_deleteGatherInput(onnx_model):
                     restart = True
     if restart:
         onnx_model = delete_useless_inputOfModel(onnx_model)
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
     return onnx_model, restart
 
 @OnnxDebuggerMeet.opt_inout_wrapper

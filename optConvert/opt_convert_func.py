@@ -2421,6 +2421,10 @@ def opt_moveForwardTranspose(onnx_model, node, node_index):
         node.input[0] = preNode.input[0]
         node.output[0] = preNode.output[0]
         onnx_model = delete_value_info_by_name(onnx_model, preNode.output[0])
+        preNodeInShape = get_shape_by_name(onnx_model, preNode.input[0])
+        newOutShape = [preNodeInShape[idx] for idx in tpPerm]
+        newValueInfo = onnx.helper.make_tensor_value_info(node.output[0], 1, newOutShape)
+        onnx_model.graph.value_info.append(newValueInfo)
         onnx_model.graph.node.remove(preNode)
         onnx_model.graph.node.insert(node_index, newPreNode)
         return onnx_model, True
@@ -2448,6 +2452,10 @@ def opt_moveForwardTranspose(onnx_model, node, node_index):
         node.input[0] = preNode.input[0]
         node.output[0] = preNode.output[0]
         onnx_model = delete_value_info_by_name(onnx_model, preNode.output[0])
+        preNodeInShape = get_shape_by_name(onnx_model, preNode.input[0] if stInput == preNode.input[1] else preNode.input[1])
+        newOutShape = [preNodeInShape[idx] for idx in tpPerm]
+        newValueInfo = onnx.helper.make_tensor_value_info(node.output[0], 1, newOutShape)
+        onnx_model.graph.value_info.append(newValueInfo)
         onnx_model.graph.node.remove(preNode)
         onnx_model.graph.node.insert(node_index, newPreNode)
         onnx_model = delete_useless_input_in_initializer(onnx_model)
@@ -2489,6 +2497,10 @@ def opt_moveForwardTranspose(onnx_model, node, node_index):
             node.input[0] = preNode.input[0]
             node.output[0] = preNode.output[0]
             onnx_model = delete_value_info_by_name(onnx_model, preNode.output[0])
+            preNodeInShape = get_shape_by_name(onnx_model, preNode.input[0])
+            newOutShape = [preNodeInShape[idx] for idx in tpPerm]
+            newValueInfo = onnx.helper.make_tensor_value_info(node.output[0], 1, newOutShape)
+            onnx_model.graph.value_info.append(newValueInfo)
             onnx_model.graph.node.remove(preNode)
             onnx_model.graph.node.insert(node_index, newPreNode)
             onnx_model = delete_useless_input_in_initializer(onnx_model)
@@ -2527,6 +2539,10 @@ def opt_moveForwardTranspose(onnx_model, node, node_index):
         node.input[0] = preNode.input[0]
         node.output[0] = preNode.output[0]
         onnx_model = delete_value_info_by_name(onnx_model, preNode.output[0])
+        preNodeInShape = get_shape_by_name(onnx_model, preNode.input[0])
+        newOutShape = [preNodeInShape[idx] for idx in tpPerm]
+        newValueInfo = onnx.helper.make_tensor_value_info(node.output[0], 1, newOutShape)
+        onnx_model.graph.value_info.append(newValueInfo)
         onnx_model.graph.node.remove(preNode)
         onnx_model.graph.node.insert(node_index, newPreNode)
         return onnx_model, True
@@ -2604,6 +2620,12 @@ def opt_moveForwardUnsqueeze(onnx_model, node, node_index):
         node.input[0] = preNode.input[0]
         node.output[0] = preNode.output[0]
         onnx_model = delete_value_info_by_name(onnx_model, preNode.output[0])
+        preNodeInShape = get_shape_by_name(onnx_model, preNode.input[0])
+        newOutShape = copy.deepcopy(preNodeInShape)
+        for axes in axes_list:
+            newOutShape.insert(axes, 1)
+        newValueInfo = onnx.helper.make_tensor_value_info(node.output[0], 1, newOutShape)
+        onnx_model.graph.value_info.append(newValueInfo)
         onnx_model.graph.node.remove(preNode)
         onnx_model.graph.node.insert(newPreNode)
         return onnx_model, True
@@ -2630,6 +2652,12 @@ def opt_moveForwardUnsqueeze(onnx_model, node, node_index):
         node.input[0] = preNode.input[1] if preNode.input[0] == stInput else preNode.input[0]
         node.output[0] = preNode.output[0]
         onnx_model = delete_value_info_by_name(onnx_model, preNode.output[0])
+        preNodeInShape = get_shape_by_name(onnx_model, preNode.input[0] if stInput == preNode.input[1] else preNode.input[1])
+        newOutShape = copy.deepcopy(preNodeInShape)
+        for axes in axes_list:
+            newOutShape.insert(axes, 1)
+        newValueInfo = onnx.helper.make_tensor_value_info(node.output[0], 1, newOutShape)
+        onnx_model.graph.value_info.append(newValueInfo)
         onnx_model.graph.node.remove(preNode)
         onnx_model.graph.node.insert(node_index, newCalNode)
         onnx_model = delete_useless_input_in_initializer(onnx_model)
