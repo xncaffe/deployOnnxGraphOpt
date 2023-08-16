@@ -2666,7 +2666,65 @@ def opt_moveForwardUnsqueeze(onnx_model, node, node_index):
         return onnx_model, False
     else:
         return onnx_model, False
-        
+    
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_replaceReshapeReduceMean2Conv(onnx_model, node, node_index):
+    if check_node_serial_group(onnx_model, node, ['Reshape', 'ReduceMean']):
+        rsNode, rmNode = get_node_serial_group(onnx_model, node, ['Reshape', 'ReduceMean'])
+        rsInShape = get_shape_by_name(onnx_model, rsNode.input[0])
+        rsOutShape = get_shape_by_name(onnx_model, rsNode.output[0])
+        if len(rsInShape) != 4 or len(rsOutShape) != 5 or rsInShape[0] != rsOutShape[0] \
+            or rsInShape[-2:] != rsOutShape[-2:] or rsInShape[1] != rsOutShape[1] * rsOutShape[2]:
+            return onnx_model, False
+        rmAxesList = attribute_to_dict(rmNode.attribute).get('axes')
+        if rmAxesList is None or len(rmAxesList) != 1:
+            return onnx_model, False
+        rmAxes = rmAxesList[0]
+        rmPosAxes = len(rsOutShape) + rmAxes if rmAxes < 0 else rmAxes
+        if rmPosAxes != 2:
+            return onnx_model, False
+        keepDim = attribute_to_dict(rmNode.attribute).get('keepdims', 0)
+        wtValue = np.array([1. / rsOutShape[2]] * rsOutShape[2], dtype=np.float32)
+        wtZeroArr = np.zeros((rsOutShape[1], rsInShape[1], 1, 1), dtype=np.float32)
+        #wtZeroArr = np.zeros((rsOutShape[1], rsOutShape[2], 1, 1), dtype=np.float32)
+        for wtOutC in range(wtZeroArr.shape[0]):
+            wtZeroArr[wtOutC, wtOutC*rsOutShape[2]:(wtOutC+1)*rsOutShape[2], :, :] = wtValue.reshape(rsOutShape[2], 1, 1)
+            #wtZeroArr[wtOutC, :rsOutShape[2], :, :] = wtValue.reshape(rsOutShape[2], 1, 1)
+        conv_attr = {'dilations': [1, 1], 'group': 1, 'kernel_shape': [1, 1], 'pads': [0, 0, 0, 0], 'strides': [1, 1]}
+        #conv_attr = {'dilations': [1, 1], 'group': rsOutShape[1], 'kernel_shape': [1, 1], 'pads': [0, 0, 0, 0], 'strides': [1, 1]}
+        convWtTensor = get_initial_by_value(onnx_model, wtZeroArr)
+        if convWtTensor is None:
+            convWtTensor = onnx.helper.make_tensor(name=rmNode.name+'_wt',
+                                                   data_type=NPDTYPE_2_ONNXDTYPE[wtZeroArr.dtype],
+                                                   dims=wtZeroArr.shape,
+                                                   vals=wtZeroArr.flatten().tolist())
+            onnx_model.graph.initializer.append(convWtTensor)
+        newConvNode = onnx.helper.make_node(name=rmNode.name+'_toConv',
+                                            op_type='Conv',
+                                            inputs=[rsNode.input[0], convWtTensor.name],
+                                            outputs=rmNode.output,
+                                            **conv_attr)
+        if keepDim == 1:
+            rmOutShape = get_shape_by_name(onnx_model, rmNode.output[0])
+            newShapeTensor = get_initial_by_value(onnx_model, np.array(rmOutShape, dtype=np.int64))
+            if newShapeTensor is None:
+                newShapeTensor = onnx.helper.make_tensor(name=rmNode.output[0]+'_newShape',
+                                                         data_type=TensorProto.INT64,
+                                                         dims=[len(rmOutShape)],
+                                                         vals=rmOutShape)
+                onnx_model.graph.initializer.append(newShapeTensor)
+            newRSNode = onnx.helper.make_node(name=rmNode.name+'_toConv'+'_reshape',
+                                              op_type='Reshape',
+                                              inputs=[rmNode.output[0]+'_4d', newShapeTensor],
+                                              outputs=[rmNode.output[0]])
+            newConvNode.output[0] = newRSNode.input[0]
+            onnx_model.graph.node.insert(node_index, newConvNode)
+        onnx_model.graph.node.insert(node_index, newConvNode)
+        onnx_model = delete_value_info_by_name(onnx_model, rsNode.output[0])
+        onnx_model = delete_nodes(onnx_model, [rmNode, rsNode])
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    return onnx_model, False
                 
         
         

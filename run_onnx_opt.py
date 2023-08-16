@@ -118,6 +118,7 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_convertMultiBatchReshapeSliceReshapeToOneBatchSliceConcat(self.onnx_model)
         
         self.onnx_model = opt_convertCustomThrConvKQV(self.onnx_model)
+        self.onnx_model = opt_replaceReshapeReduceMean2Conv(self.onnx_model)
         
         self.onnx_model = opt_fusionTransposeReshapeSMishReshapeTranspose(self.onnx_model)
         self.onnx_model = opt_fusionMultiTransposeReshapeXMultiReshapeTranspose(self.onnx_model)
