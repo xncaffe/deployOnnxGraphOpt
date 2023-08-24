@@ -83,26 +83,28 @@ def opt_convertMultiKMultiHeadAttentionKQV(onnx_model, node, node_index):
         kqBotMul = serial_nodes['kq_serial'][0]
         kqSoftmax = serial_nodes['kq_serial'][1]
         kqTopMul = serial_nodes['kq_serial'][2]
-        kqBotMulOtIn = kqBotMul.input[0] if kqBotMul.input[1] == kqSoftmax.output[0] else kqBotMul.input[1]
-        kqTopMulOtIn = kqTopMul.input[0] if kqTopMul.input[1] == kqDiv.output[0] else kqTopMul.input[1]
-        kqBotMulOtArr = get_tensor_from_initializer(onnx_model, kqBotMulOtIn)
-        if kqBotMulOtArr.size != 0:
-            while True:
-                if len(kqBotMulOtArr.shape) == 4:
-                    break
-                kqBotMulOtArr = np.expand_dims(kqBotMulOtArr, axis=0)
-        kqTopMulOtArr = get_tensor_from_initializer(onnx_model, kqTopMulOtIn)
-        if kqTopMulOtArr.size != 0:
-            while True:
-                if len(kqTopMulOtArr.shape) == 4:
-                    break
-                kqTopMulOtArr = np.expand_dims(kqTopMulOtArr, axis=0)
-        kqBotMulOtInShape = get_shape_by_name(onnx_model, kqBotMulOtIn)
-        kqTopMulOtInShape = get_shape_by_name(onnx_model, kqTopMulOtIn)
-        kqBotMulOtIn4DShape = kqBotMulOtInShape if len(kqBotMulOtInShape) == 4 \
-            else [1]*(4-len(kqBotMulOtInShape)) + kqBotMulOtInShape
-        kqTopMulOtIn4DShape = kqTopMulOtInShape if len(kqTopMulOtInShape) == 4 \
-            else [1]*(4-len(kqTopMulOtInShape)) + kqTopMulOtInShape
+        if kqBotMul is not None:
+            kqBotMulOtIn = kqBotMul.input[0] if kqBotMul.input[1] == kqSoftmax.output[0] else kqBotMul.input[1]
+            kqBotMulOtArr = get_tensor_from_initializer(onnx_model, kqBotMulOtIn)
+            if kqBotMulOtArr.size != 0:
+                while True:
+                    if len(kqBotMulOtArr.shape) == 4:
+                        break
+                    kqBotMulOtArr = np.expand_dims(kqBotMulOtArr, axis=0)
+            kqBotMulOtInShape = get_shape_by_name(onnx_model, kqBotMulOtIn)
+            kqBotMulOtIn4DShape = kqBotMulOtInShape if len(kqBotMulOtInShape) == 4 \
+                else [1]*(4-len(kqBotMulOtInShape)) + kqBotMulOtInShape
+        if kqTopMul is not None:
+            kqTopMulOtIn = kqTopMul.input[0] if kqTopMul.input[1] == kqDiv.output[0] else kqTopMul.input[1]
+            kqTopMulOtArr = get_tensor_from_initializer(onnx_model, kqTopMulOtIn)
+            if kqTopMulOtArr.size != 0:
+                while True:
+                    if len(kqTopMulOtArr.shape) == 4:
+                        break
+                    kqTopMulOtArr = np.expand_dims(kqTopMulOtArr, axis=0)
+            kqTopMulOtInShape = get_shape_by_name(onnx_model, kqTopMulOtIn)
+            kqTopMulOtIn4DShape = kqTopMulOtInShape if len(kqTopMulOtInShape) == 4 \
+                else [1]*(4-len(kqTopMulOtInShape)) + kqTopMulOtInShape
         kqSoftmaxAxis = attribute_to_dict(kqSoftmax.attribute).get('axis', 1)
         kqSoftmaxPosAxis = len(kRSOutShape) + kqSoftmaxAxis if kqSoftmaxAxis < 0 else kqSoftmaxAxis
         newKQSoftmaxAxis = [0, 3, 1, 2].index(kqSoftmaxPosAxis)
@@ -250,58 +252,60 @@ def opt_convertMultiKMultiHeadAttentionKQV(onnx_model, node, node_index):
         newKNodesList.append(newKAdd)
         newQNodesList.append(newQAdd)
         newVNodesList.append(newVAdd)
-        newKQTopMulOtIn = None
-        newKQBotMulOtIn = None
-        if kqTopMulOtArr.size == 0:
-            newKQTopMulOtTPIn = kqTopMulOtIn
-            if len(kqTopMulOtInShape) != 4:
-                newKQTopMulOtInShapeTensor = get_initial_by_value(onnx_model, np.array(kqTopMulOtIn4DShape, dtype=np.int64))
-                if newKQTopMulOtInShapeTensor is None:
-                    newKQTopMulOtInShapeTensor = onnx.helper.make_tensor(name=kqTopMulOtIn+'_newShape',
-                                                                        data_type=TensorProto.INT64,
-                                                                        dims=[len(kqTopMulOtIn4DShape)],
-                                                                        vals=kqTopMulOtIn4DShape)
-                    onnx_model.graph.initializer.append(newKQTopMulOtInShapeTensor)
-                newKQTopMulOtRSNode = onnx.helper.make_node(name=kqTopMulOtIn+'_reshape',
-                                                            op_type='Reshape',
-                                                            inputs=[kqTopMulOtIn, newKQTopMulOtInShapeTensor.name],
-                                                            outputs=[kqTopMulOtIn+'_rsout'])
-                if newKQTopMulOtRSNode not in list(onnx_model.graph.node):
-                    newKQOtNodesList.append(newKQTopMulOtRSNode)
-                newKQTopMulOtTPIn = newKQTopMulOtRSNode.output[0]
-            newKQTopMulOtTPNode = onnx.helper.make_node(name=kqTopMulOtIn+'_transpose',
-                                                        op_type='Transpose',
-                                                        inputs=[newKQTopMulOtTPIn],
-                                                        outputs=[kqTopMulOtIn+'_tpout'],
-                                                        perm=[0, 3, 1, 2])
-            if newKQTopMulOtTPNode not in list(onnx_model.graph.node):
-                newKQOtNodesList.append(newKQTopMulOtTPNode)
-            newKQTopMulOtIn = newKQTopMulOtTPNode.output[0]
-        if kqBotMulOtArr.size == 0:
-            newKQBotMulOtTPIn = kqBotMulOtIn
-            if len(kqBotMulOtInShape) != 4:
-                newKQBotMulOtInShapeTensor = get_initial_by_value(onnx_model, np.array(kqBotMulOtIn4DShape, dtype=np.int64))
-                if newKQBotMulOtInShapeTensor is None:
-                    newKQBotMulOtInShapeTensor = onnx.helper.make_tensor(name=kqBotMulOtIn+'_newShape',
-                                                                         data_type=TensorProto.INT64,
-                                                                         dims=[len(kqBotMulOtIn4DShape)],
-                                                                         vals=kqBotMulOtIn4DShape)
-                    onnx_model.graph.initializer.append(newKQBotMulOtInShapeTensor)
-                newKQBotMulOtRSNode = onnx.helper.make_node(name=kqBotMulOtIn+'_reshape',
-                                                            op_type='Reshape',
-                                                            inputs=[kqBotMulOtIn, newKQBotMulOtInShapeTensor.name],
-                                                            outputs=[kqBotMulOtIn+'_rsout'])
-                if newKQBotMulOtRSNode not in (list(onnx_model.graph.node) + newKQOtNodesList):
-                    newKQOtNodesList.append(newKQBotMulOtRSNode)
-                newKQBotMulOtTPIn = newKQBotMulOtRSNode.output[0]
-            newKQBotMulOtTPNode = onnx.helper.make_node(name=kqBotMulOtIn+'_transpose',
-                                                        op_type='Transpose',
-                                                        inputs=[newKQBotMulOtTPIn],
-                                                        outputs=[kqTopMulOtIn+'_tpout'],
-                                                        perm=[0, 3, 1, 2])
-            if newKQBotMulOtTPNode not in (newKQOtNodesList + list(onnx_model.graph.node)):
-                newKQOtNodesList.append(newKQBotMulOtTPNode)
-            newKQBotMulOtIn = newKQBotMulOtTPNode.output[0]
+        if kqTopMul is not None:
+            newKQTopMulOtIn = None
+            if kqTopMulOtArr.size == 0:
+                newKQTopMulOtTPIn = kqTopMulOtIn
+                if len(kqTopMulOtInShape) != 4:
+                    newKQTopMulOtInShapeTensor = get_initial_by_value(onnx_model, np.array(kqTopMulOtIn4DShape, dtype=np.int64))
+                    if newKQTopMulOtInShapeTensor is None:
+                        newKQTopMulOtInShapeTensor = onnx.helper.make_tensor(name=kqTopMulOtIn+'_newShape',
+                                                                            data_type=TensorProto.INT64,
+                                                                            dims=[len(kqTopMulOtIn4DShape)],
+                                                                            vals=kqTopMulOtIn4DShape)
+                        onnx_model.graph.initializer.append(newKQTopMulOtInShapeTensor)
+                    newKQTopMulOtRSNode = onnx.helper.make_node(name=kqTopMulOtIn+'_reshape',
+                                                                op_type='Reshape',
+                                                                inputs=[kqTopMulOtIn, newKQTopMulOtInShapeTensor.name],
+                                                                outputs=[kqTopMulOtIn+'_rsout'])
+                    if newKQTopMulOtRSNode not in list(onnx_model.graph.node):
+                        newKQOtNodesList.append(newKQTopMulOtRSNode)
+                    newKQTopMulOtTPIn = newKQTopMulOtRSNode.output[0]
+                newKQTopMulOtTPNode = onnx.helper.make_node(name=kqTopMulOtIn+'_transpose',
+                                                            op_type='Transpose',
+                                                            inputs=[newKQTopMulOtTPIn],
+                                                            outputs=[kqTopMulOtIn+'_tpout'],
+                                                            perm=[0, 3, 1, 2])
+                if newKQTopMulOtTPNode not in list(onnx_model.graph.node):
+                    newKQOtNodesList.append(newKQTopMulOtTPNode)
+                newKQTopMulOtIn = newKQTopMulOtTPNode.output[0]
+        if kqBotMul is not None:
+            newKQBotMulOtIn = None
+            if kqBotMulOtArr.size == 0:
+                newKQBotMulOtTPIn = kqBotMulOtIn
+                if len(kqBotMulOtInShape) != 4:
+                    newKQBotMulOtInShapeTensor = get_initial_by_value(onnx_model, np.array(kqBotMulOtIn4DShape, dtype=np.int64))
+                    if newKQBotMulOtInShapeTensor is None:
+                        newKQBotMulOtInShapeTensor = onnx.helper.make_tensor(name=kqBotMulOtIn+'_newShape',
+                                                                            data_type=TensorProto.INT64,
+                                                                            dims=[len(kqBotMulOtIn4DShape)],
+                                                                            vals=kqBotMulOtIn4DShape)
+                        onnx_model.graph.initializer.append(newKQBotMulOtInShapeTensor)
+                    newKQBotMulOtRSNode = onnx.helper.make_node(name=kqBotMulOtIn+'_reshape',
+                                                                op_type='Reshape',
+                                                                inputs=[kqBotMulOtIn, newKQBotMulOtInShapeTensor.name],
+                                                                outputs=[kqBotMulOtIn+'_rsout'])
+                    if newKQBotMulOtRSNode not in (list(onnx_model.graph.node) + newKQOtNodesList):
+                        newKQOtNodesList.append(newKQBotMulOtRSNode)
+                    newKQBotMulOtTPIn = newKQBotMulOtRSNode.output[0]
+                newKQBotMulOtTPNode = onnx.helper.make_node(name=kqBotMulOtIn+'_transpose',
+                                                            op_type='Transpose',
+                                                            inputs=[newKQBotMulOtTPIn],
+                                                            outputs=[kqTopMulOtIn+'_tpout'],
+                                                            perm=[0, 3, 1, 2])
+                if newKQBotMulOtTPNode not in (newKQOtNodesList + list(onnx_model.graph.node)):
+                    newKQOtNodesList.append(newKQBotMulOtTPNode)
+                newKQBotMulOtIn = newKQBotMulOtTPNode.output[0]
 
         kqvSliceNodesList = []
         kSliceLRNodesList = []
@@ -329,13 +333,18 @@ def opt_convertMultiKMultiHeadAttentionKQV(onnx_model, node, node_index):
                                                      vals=[1])
             onnx_model.graph.initializer.append(tileAxesTensor)
         kqOtMulTileAxesTensor = get_initial_by_value(onnx_model, np.array([2], dtype=np.int64))
-        if ((kqTopMulOtArr.size != 0 and kqTopMulOtIn4DShape[1] != 1) or (kqBotMulOtArr.size != 0 and kqBotMulOtIn4DShape[1] != 1)) \
-            and (kqOtMulTileAxesTensor is None):
-                kqOtMulTileAxesTensor = onnx.helper.make_tensor(name=kqBotMulOtIn+'_'+kqTopMulOtIn+'_slice_axes',
-                                                            data_type=TensorProto.INT64,
-                                                            dims=[1],
-                                                            vals=[2])
-                onnx_model.graph.initializer.append(kqOtMulTileAxesTensor)         
+        if kqTopMul is not None and (kqTopMulOtArr.size != 0 and kqTopMulOtIn4DShape[1] != 1) and (kqOtMulTileAxesTensor is None):
+            kqOtMulTileAxesTensor = onnx.helper.make_tensor(name=kqTopMulOtIn+'_slice_axes',
+                                                        data_type=TensorProto.INT64,
+                                                        dims=[1],
+                                                        vals=[2])
+            onnx_model.graph.initializer.append(kqOtMulTileAxesTensor) 
+        if kqBotMul is not None and (kqBotMulOtArr.size != 0 and kqBotMulOtIn4DShape[1] != 1) and (kqOtMulTileAxesTensor is None):
+            kqOtMulTileAxesTensor = onnx.helper.make_tensor(name=kqBotMulOtIn+'_slice_axes',
+                                                        data_type=TensorProto.INT64,
+                                                        dims=[1],
+                                                        vals=[2])
+            onnx_model.graph.initializer.append(kqOtMulTileAxesTensor)         
         tileStepTensor = tileAxesTensor
         kqTileStart = tileStart
         kqTileStartTensor = tileStartTensor
@@ -459,87 +468,92 @@ def opt_convertMultiKMultiHeadAttentionKQV(onnx_model, node, node_index):
                                                  inputs=newKQDivInput,
                                                  outputs=[kqDiv.output[0]+('_%d'%tile_id if tile_num != 1 else '')])
             kqSliceCalNodesList.append(newKQDivNode)
-            if kqTopMulOtArr.size != 0:
-                newTileKQTopMulOtIn = kqTopMulOtIn
-                if kqTopMulOtArr.size != 1:
-                    newKQTopMulArr = kqTopMulOtArr[:, 0, :, :] if kqTopMulOtArr.shape[1] == 1 else kqTopMulOtArr[:, tile_id, :, :]
-                    newKQTopMulArr = np.transpose(newKQTopMulArr, (0, 3, 1, 2))
-                    newKQTopMulTensor = get_initial_by_value(onnx_model, newKQTopMulArr)
-                    if newKQTopMulTensor is None:
-                        newKQTopMulTensor = onnx.helper.make_tensor(
-                                    name=kqTopMulOtIn+('_new' if kqTopMulOtArr.shape[1] == 1 else '_tile_%d'%tile_id),
-                                    data_type=NPDTYPE_2_ONNXDTYPE[newKQTopMulArr.dtype],
-                                    dims=newKQTopMulArr.shape,
-                                    vals=newKQTopMulArr.flatten().tolist())
-                        onnx_model.graph.initializer.append(newKQTopMulTensor)
-                    newTileKQTopMulOtIn = newKQTopMulTensor.name
-            else:
-                if kqTopMulOtIn4DShape[1] != 1:
-                    kqOtMulTileEndTensor = get_initial_by_value(onnx_model, np.array([tile_id+1], dtype=np.int64))
-                    if kqOtMulTileEndTensor is None:
-                        kqOtMulTileEndTensor = onnx.helper.make_tensor(name=kqTopMulOtIn+'_tile_loc_%d'%(tile_id+1),
-                                                                         data_type=TensorProto.INT64,
-                                                                         dims=[1],
-                                                                         vals=[tile_id+1])
-                        onnx_model.graph.initializer.append(kqOtMulTileEndTensor)
-                    newKQTopMulOtSliceIn = [newKQTopMulOtIn, kqOtMulTileStartTensor.name, kqOtMulTileEndTensor.name, 
-                                            kqOtMulTileAxesTensor.name, kqOtMulTileStepTensor.name]
-                    newKQTopMulOtSliceNode = onnx.helper.make_node(name=kqTopMulOtIn+'_toSlice_%d'%tile_id,
-                                                                    op_type='Slice',
-                                                                    inputs=newKQTopMulOtSliceIn,
-                                                                    outputs=[kqTopMulOtIn+'_tileout_%d'%tile_id])
-                    newKQOtNodesList.append(newKQTopMulOtSliceNode)
-                    newTileKQTopMulOtIn = newKQTopMulOtSliceNode.output[0]
-                    kqOtMulTileStartTensor = kqOtMulTileEndTensor
+            if kqTopMul is not None:
+                if kqTopMulOtArr.size != 0:
+                    newTileKQTopMulOtIn = kqTopMulOtIn
+                    if kqTopMulOtArr.size != 1:
+                        newKQTopMulArr = kqTopMulOtArr[:, 0, :, :] if kqTopMulOtArr.shape[1] == 1 else kqTopMulOtArr[:, tile_id, :, :]
+                        newKQTopMulArr = np.transpose(newKQTopMulArr, (0, 3, 1, 2))
+                        newKQTopMulTensor = get_initial_by_value(onnx_model, newKQTopMulArr)
+                        if newKQTopMulTensor is None:
+                            newKQTopMulTensor = onnx.helper.make_tensor(
+                                        name=kqTopMulOtIn+('_new' if kqTopMulOtArr.shape[1] == 1 else '_tile_%d'%tile_id),
+                                        data_type=NPDTYPE_2_ONNXDTYPE[newKQTopMulArr.dtype],
+                                        dims=newKQTopMulArr.shape,
+                                        vals=newKQTopMulArr.flatten().tolist())
+                            onnx_model.graph.initializer.append(newKQTopMulTensor)
+                        newTileKQTopMulOtIn = newKQTopMulTensor.name
                 else:
-                    newTileKQTopMulOtIn = newKQTopMulOtIn
-            if kqBotMulOtArr.size != 0:
-                newTileKQBotMulOtIn = kqBotMulOtIn
-                if kqBotMulOtArr.size != 1:
-                    newKQBotMulArr = kqBotMulOtArr[:, 0, :, :] if kqBotMulOtArr.shape[1] == 1 else kqBotMulOtArr[:, tile_id, :, :]
-                    newKQBotMulArr = np.transpose(newKQBotMulArr, (0, 3, 1, 2))
-                    newKQBotMulTensor = get_initial_by_value(onnx_model, newKQBotMulArr)
-                    if newKQBotMulTensor is None:
-                        newKQBotMulTensor = onnx.helper.make_tensor(
-                                    name=kqBotMulOtIn+('_new' if kqBotMulOtArr.shape[1] == 1 else '_tile_%d'%tile_id),
-                                    data_type=NPDTYPE_2_ONNXDTYPE[newKQBotMulArr.dtype],
-                                    dims=newKQBotMulArr.shape,
-                                    vals=newKQBotMulArr.flatten().tolist())
-                        onnx_model.graph.initializer.append(newKQBotMulTensor)
-                    newTileKQBotMulOtIn = newKQBotMulTensor.name 
-            else:
-                if kqBotMulOtIn4DShape[1] != 1:
-                    kqOtMulTileEndTensor = get_initial_by_value(onnx_model, np.array([tile_id+1], dtype=np.int64))
-                    if kqOtMulTileEndTensor is None:
-                        kqOtMulTileEndTensor = onnx.helper.make_tensor(name=kqTopMulOtIn+'_tile_loc_%d'%(tile_id+1),
-                                                                         data_type=TensorProto.INT64,
-                                                                         dims=[1],
-                                                                         vals=[tile_id+1])
-                        onnx_model.graph.initializer.append(kqOtMulTileEndTensor)
-                    newKQBotMulOtSliceIn = [newKQBotMulOtIn, kqOtMulTileStartTensor.name, kqOtMulTileEndTensor.name, 
-                                            kqOtMulTileAxesTensor.name, kqOtMulTileStepTensor.name]
-                    newKQBotMulOtSliceNode = onnx.helper.make_node(name=kqBotMulOtIn+'_toSlice_%d'%tile_id,
-                                                                    op_type='Slice',
-                                                                    inputs=newKQBotMulOtSliceIn,
-                                                                    outputs=[kqBotMulOtIn+'_tileout_%d'%tile_id])
-                    newKQOtNodesList.append(newKQBotMulOtSliceNode)
-                    newTileKQBotMulOtIn = newKQBotMulOtSliceNode.output[0]
-                else:
-                    newTileKQBotMulOtIn = newKQBotMulOtIn
-            newKQTopMul = onnx.helper.make_node(name=kqTopMul.name+('_tile_%d'%tile_id if tile_num != 1 else ''),
-                                                op_type='Mul',
-                                                inputs=[newKQDivNode.output[0], newTileKQTopMulOtIn],
-                                                outputs=[kqTopMul.output[0]+('_%d'%tile_id if tile_num != 1 else '')])
+                    if kqTopMulOtIn4DShape[1] != 1:
+                        kqOtMulTileEndTensor = get_initial_by_value(onnx_model, np.array([tile_id+1], dtype=np.int64))
+                        if kqOtMulTileEndTensor is None:
+                            kqOtMulTileEndTensor = onnx.helper.make_tensor(name=kqTopMulOtIn+'_tile_loc_%d'%(tile_id+1),
+                                                                            data_type=TensorProto.INT64,
+                                                                            dims=[1],
+                                                                            vals=[tile_id+1])
+                            onnx_model.graph.initializer.append(kqOtMulTileEndTensor)
+                        newKQTopMulOtSliceIn = [newKQTopMulOtIn, kqOtMulTileStartTensor.name, kqOtMulTileEndTensor.name, 
+                                                kqOtMulTileAxesTensor.name, kqOtMulTileStepTensor.name]
+                        newKQTopMulOtSliceNode = onnx.helper.make_node(name=kqTopMulOtIn+'_toSlice_%d'%tile_id,
+                                                                        op_type='Slice',
+                                                                        inputs=newKQTopMulOtSliceIn,
+                                                                        outputs=[kqTopMulOtIn+'_tileout_%d'%tile_id])
+                        newKQOtNodesList.append(newKQTopMulOtSliceNode)
+                        newTileKQTopMulOtIn = newKQTopMulOtSliceNode.output[0]
+                        kqOtMulTileStartTensor = kqOtMulTileEndTensor
+                    else:
+                        newTileKQTopMulOtIn = newKQTopMulOtIn
+                newKQTopMul = onnx.helper.make_node(name=kqTopMul.name+('_tile_%d'%tile_id if tile_num != 1 else ''),
+                                    op_type='Mul',
+                                    inputs=[newKQDivNode.output[0], newTileKQTopMulOtIn],
+                                    outputs=[kqTopMul.output[0]+('_%d'%tile_id if tile_num != 1 else '')])
+                kqSliceCalNodesList.append(newKQTopMul)
+            newKQSoftmaxInput = [newKQDivNode.output[0]] if kqTopMul is None else [newKQTopMul.output[0]]
             newKQSoftmax = onnx.helper.make_node(name=kqSoftmax.name+('_tile_%d'%tile_id if tile_num != 1 else ''),
                                                  op_type='Softmax',
-                                                 inputs=newKQTopMul.output,
+                                                 inputs=newKQSoftmaxInput,
                                                  outputs=[kqSoftmax.output[0]+('_%d'%tile_id if tile_num != 1 else '')],
                                                  axis=newKQSoftmaxAxis)
-            newKQBotMul = onnx.helper.make_node(name=kqBotMul.name+('_tile_%d'%tile_id if tile_num != 1 else ''),
-                                                op_type='Mul',
-                                                inputs=[newKQSoftmax.output[0], newTileKQBotMulOtIn],
-                                                outputs=[kqBotMul.output[0]+('_%d'%tile_id if tile_num != 1 else '')])
-            kqSliceCalNodesList += [newKQTopMul, newKQSoftmax, newKQBotMul]
+            kqSliceCalNodesList.append(newKQSoftmax)
+            if kqBotMul is not None:
+                if kqBotMulOtArr.size != 0:
+                    newTileKQBotMulOtIn = kqBotMulOtIn
+                    if kqBotMulOtArr.size != 1:
+                        newKQBotMulArr = kqBotMulOtArr[:, 0, :, :] if kqBotMulOtArr.shape[1] == 1 else kqBotMulOtArr[:, tile_id, :, :]
+                        newKQBotMulArr = np.transpose(newKQBotMulArr, (0, 3, 1, 2))
+                        newKQBotMulTensor = get_initial_by_value(onnx_model, newKQBotMulArr)
+                        if newKQBotMulTensor is None:
+                            newKQBotMulTensor = onnx.helper.make_tensor(
+                                        name=kqBotMulOtIn+('_new' if kqBotMulOtArr.shape[1] == 1 else '_tile_%d'%tile_id),
+                                        data_type=NPDTYPE_2_ONNXDTYPE[newKQBotMulArr.dtype],
+                                        dims=newKQBotMulArr.shape,
+                                        vals=newKQBotMulArr.flatten().tolist())
+                            onnx_model.graph.initializer.append(newKQBotMulTensor)
+                        newTileKQBotMulOtIn = newKQBotMulTensor.name 
+                else:
+                    if kqBotMulOtIn4DShape[1] != 1:
+                        kqOtMulTileEndTensor = get_initial_by_value(onnx_model, np.array([tile_id+1], dtype=np.int64))
+                        if kqOtMulTileEndTensor is None:
+                            kqOtMulTileEndTensor = onnx.helper.make_tensor(name=kqTopMulOtIn+'_tile_loc_%d'%(tile_id+1),
+                                                                            data_type=TensorProto.INT64,
+                                                                            dims=[1],
+                                                                            vals=[tile_id+1])
+                            onnx_model.graph.initializer.append(kqOtMulTileEndTensor)
+                        newKQBotMulOtSliceIn = [newKQBotMulOtIn, kqOtMulTileStartTensor.name, kqOtMulTileEndTensor.name, 
+                                                kqOtMulTileAxesTensor.name, kqOtMulTileStepTensor.name]
+                        newKQBotMulOtSliceNode = onnx.helper.make_node(name=kqBotMulOtIn+'_toSlice_%d'%tile_id,
+                                                                        op_type='Slice',
+                                                                        inputs=newKQBotMulOtSliceIn,
+                                                                        outputs=[kqBotMulOtIn+'_tileout_%d'%tile_id])
+                        newKQOtNodesList.append(newKQBotMulOtSliceNode)
+                        newTileKQBotMulOtIn = newKQBotMulOtSliceNode.output[0]
+                    else:
+                        newTileKQBotMulOtIn = newKQBotMulOtIn     
+                newKQBotMul = onnx.helper.make_node(name=kqBotMul.name+('_tile_%d'%tile_id if tile_num != 1 else ''),
+                                                    op_type='Mul',
+                                                    inputs=[newKQSoftmax.output[0], newTileKQBotMulOtIn],
+                                                    outputs=[kqBotMul.output[0]+('_%d'%tile_id if tile_num != 1 else '')])
+                kqSliceCalNodesList.append(newKQBotMul)
             vF2WShape = [vRSOutShape[-1], vRSOutShape[1], 1, 1]
             vF2WShapeTensor = get_initial_by_value(onnx_model, np.array(vF2WShape, dtype=np.int64))
             if vF2WShapeTensor is None:
@@ -553,9 +567,10 @@ def opt_convertMultiKMultiHeadAttentionKQV(onnx_model, node, node_index):
                                                inputs=[vSliceNode.output[0], vF2WShapeTensor.name],
                                                outputs=[vTranspose.output[0]+('_%d'%tile_id if tile_num != 1 else '')])
             qvSliceF2WNodesList.append(vF2WRSNode)
+            newKQVConvInputs = [newKQSoftmax.output[0], vF2WRSNode.output[0]] if kqBotMul is None else [newKQBotMul.output[0], vF2WRSNode.output[0]]
             newKQVConvNode = onnx.helper.make_node(name=kqvMatMul.name+('_toConv_%d'%tile_id if tile_num != 1 else ''),
                                                    op_type='Conv',
-                                                   inputs=[newKQBotMul.output[0], vF2WRSNode.output[0]],
+                                                   inputs=newKQVConvInputs,
                                                    outputs=[kqvMatMul.output[0]+('_%d'%tile_id if tile_num != 1 else '')],
                                                    **conv_attr)
             kqvSliceConvNodesList.append(newKQVConvNode)
@@ -634,9 +649,10 @@ def opt_convertMultiKMultiHeadAttentionKQV(onnx_model, node, node_index):
         fwNodesList.append(lastTPNode)
         for str_key in list(serial_nodes.keys()):
             src_nodes_list = serial_nodes[str_key]
-            for src_node in src_nodes_list:
+            select_src_nodes_list = [src_node for src_node in src_nodes_list if src_node is not None]
+            for src_node in select_src_nodes_list:
                 if src_node.name != node.name: onnx_model = delete_value_info_by_name(onnx_model, src_node.output[0])
-            onnx_model = delete_nodes(onnx_model, src_nodes_list)
+            onnx_model = delete_nodes(onnx_model, select_src_nodes_list)
         cr_min_id = len(onnx_model.graph.node) + 1
         for afNode in afNodesList:
             cr_min_id = min(cr_min_id, get_node_id(onnx_model, afNode))

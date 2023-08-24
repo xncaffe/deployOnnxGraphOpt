@@ -85,6 +85,7 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_replaceInputSqueezeCastEqueezeWhereOrNotWhereWithMul(self.onnx_model)
         if self.onnx_model.opset_import[0].version >= 17:
             self.onnx_model = opt_fusionSeparatedLayerNormal(self.onnx_model)
+        self.onnx_model = opt_replaceWhere(self.onnx_model)
         self.onnx_model = opt_fusionMultiMulDiv(self.onnx_model)
         self.onnx_model = opt_replaceDivByMul(self.onnx_model)
         self.onnx_model = opt_fusionMultiSubReduceMean(self.onnx_model)
@@ -124,6 +125,8 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_fusionMultiTransposeReshapeXMultiReshapeTranspose(self.onnx_model)
         self.onnx_model = opt_fusionReshapeSplitSMishReshape(self.onnx_model)
         self.onnx_model = opt_convertCalculateTransposeReshapeSoftmax(self.onnx_model)
+        self.onnx_model = opt_fusionTransposeReshapeTransposeReshapeOrReverse(self.onnx_model)
+        self.onnx_model = opt_convertSliceConcatTranspose2ConcatTransposeConv(self.onnx_model)
         self.onnx_model = opt_moveForwardUnsqueeze(self.onnx_model)
         self.onnx_model = opt_moveForwardTranspose(self.onnx_model)
         

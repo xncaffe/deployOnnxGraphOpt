@@ -340,130 +340,245 @@ def get_custom_three_conv_kqv_block_nodes(onnx_model, node):
     return reNodesDict
 
 def get_gelinshentong_attention_block_nodes(onnx_model, node):
-    if node.op_type != 'Add'or \
-        (not find_init_by_name(onnx_model, node.input[0]) and not find_init_by_name(onnx_model, node.input[1])):
-        return None
-    FWAddDyInput = node.input[1] if find_init_by_name(onnx_model, node.input[0]) else node.input[0]
-    FWMatMul = get_node_by_output(onnx_model, FWAddDyInput)
-    if FWMatMul.op_type != 'MatMul' or \
-        (not find_init_by_name(onnx_model, FWMatMul.input[0]) and not find_init_by_name(onnx_model, FWMatMul.input[1])):
-        return None
-    FWMatMulDyInput = FWMatMul.input[0] if find_init_by_name(onnx_model, FWMatMul.input[1]) else FWMatMul.input[1]
-    FWReshape = get_node_by_output(onnx_model, FWMatMulDyInput)
-    if FWReshape.op_type != 'Reshape':
-        return None
-    FWTranspose = get_node_by_output(onnx_model, FWReshape.input[0])
-    if FWTranspose.op_type != 'Transpose':
-        return None
-    kqvMatMul = get_node_by_output(onnx_model, FWTranspose.input[0])
-    if kqvMatMul.op_type != 'MatMul' \
-        or find_init_by_name(onnx_model, kqvMatMul.input[0]) or find_init_by_name(onnx_model, kqvMatMul.input[1]):
+    def get_serial_nodes_withwhere(onnx_model, node):
+        if node.op_type != 'Add'or \
+            (not find_init_by_name(onnx_model, node.input[0]) and not find_init_by_name(onnx_model, node.input[1])):
             return None
-    kqBotMul = get_node_by_output(onnx_model, kqvMatMul.input[0])
-    if kqBotMul.op_type != 'Mul':
+        FWAddDyInput = node.input[1] if find_init_by_name(onnx_model, node.input[0]) else node.input[0]
+        FWMatMul = get_node_by_output(onnx_model, FWAddDyInput)
+        if FWMatMul.op_type != 'MatMul' or \
+            (not find_init_by_name(onnx_model, FWMatMul.input[0]) and not find_init_by_name(onnx_model, FWMatMul.input[1])):
             return None
-    kqSoftmax = get_node_by_output(onnx_model, kqBotMul.input[0])
-    if kqSoftmax is None or kqSoftmax.op_type != 'Softmax':
-        kqSoftmax = get_node_by_output(onnx_model, kqBotMul.input[1])
-    if kqSoftmax is None or kqSoftmax.op_type != 'Softmax':
-        return None
-    kqTopMul = get_node_by_output(onnx_model, kqSoftmax.input[0])
-    if kqTopMul.op_type != 'Mul':
-        return None
-    kqDiv = get_node_by_output(onnx_model, kqTopMul.input[0])
-    if kqDiv is None or kqDiv.op_type not in ['Mul', 'Div']:
-        kqDiv = get_node_by_output(onnx_model, kqTopMul.input[1])
-    else:
-        if not find_init_by_name(onnx_model, kqDiv.input[0]) and not find_init_by_name(onnx_model, kqDiv.input[1]):
+        FWMatMulDyInput = FWMatMul.input[0] if find_init_by_name(onnx_model, FWMatMul.input[1]) else FWMatMul.input[1]
+        FWReshape = get_node_by_output(onnx_model, FWMatMulDyInput)
+        if FWReshape.op_type != 'Reshape':
+            return None
+        FWTranspose = get_node_by_output(onnx_model, FWReshape.input[0])
+        if FWTranspose.op_type != 'Transpose':
+            return None
+        kqvMatMul = get_node_by_output(onnx_model, FWTranspose.input[0])
+        if kqvMatMul.op_type != 'MatMul' \
+            or find_init_by_name(onnx_model, kqvMatMul.input[0]) or find_init_by_name(onnx_model, kqvMatMul.input[1]):
+                return None
+        kqBotMul = get_node_by_output(onnx_model, kqvMatMul.input[0])
+        if kqBotMul.op_type != 'Mul':
+            return None
+        kqSoftmax = get_node_by_output(onnx_model, kqBotMul.input[0])
+        if kqSoftmax is None or kqSoftmax.op_type != 'Softmax':
+            kqSoftmax = get_node_by_output(onnx_model, kqBotMul.input[1])
+        if kqSoftmax is None or kqSoftmax.op_type != 'Softmax':
+            return None
+        kqTopMul = get_node_by_output(onnx_model, kqSoftmax.input[0])
+        if kqTopMul.op_type != 'Mul':
+            return None
+        kqDiv = get_node_by_output(onnx_model, kqTopMul.input[0])
+        if kqDiv is None or kqDiv.op_type not in ['Mul', 'Div']:
             kqDiv = get_node_by_output(onnx_model, kqTopMul.input[1])
         else:
-            kqDivDyInput = kqDiv.input[0] if find_init_by_name(onnx_model, kqDiv.input[1]) else kqDiv.input[1]
-            kqAdd = get_node_by_output(onnx_model, kqDivDyInput)
-            if kqAdd is None or kqAdd.op_type != 'Add' \
-                or find_init_by_name(onnx_model, kqAdd.input[0]) or find_init_by_name(onnx_model, kqAdd.input[1]):
-                    kqDiv = get_node_by_output(onnx_model, kqTopMul.input[1])
-    if kqDiv is None or kqDiv.op_type not in ['Mul', 'Div']:
-        return None
-    if not find_init_by_name(onnx_model, kqDiv.input[0]) and not find_init_by_name(onnx_model, kqDiv.input[1]):
-        return None
-    kqDivDyInput = kqDiv.input[0] if find_init_by_name(onnx_model, kqDiv.input[1]) else kqDiv.input[1]
-    kqAdd = get_node_by_output(onnx_model, kqDivDyInput)
-    if kqAdd.op_type != 'Add' or find_init_by_name(onnx_model, kqAdd.input[0]) or find_init_by_name(onnx_model, kqAdd.input[1]):
-        return None
-    kqMatMul = get_node_by_output(onnx_model, kqAdd.input[0])
-    kRightMatMul = get_node_by_output(onnx_model, kqAdd.input[1])
-    if kqMatMul.op_type != 'MatMul' or kRightMatMul.op_type != 'MatMul':
-        return None
-    if find_init_by_name(onnx_model, kqMatMul.input[0]) or find_init_by_name(onnx_model, kqMatMul.input[1]):
-        kqMatMul, kRightMatMul = [kRightMatMul, kqMatMul]
-    kLeftTranspose = get_node_by_output(onnx_model, kqMatMul.input[0])
-    if kLeftTranspose.op_type != 'Transpose':
-        return None
-    kLeftAdd = get_node_by_output(onnx_model, kLeftTranspose.input[0])
-    if kLeftAdd is None or kLeftAdd.op_type != 'Add' or \
-        (not find_init_by_name(onnx_model, kLeftAdd.input[0]) and not find_init_by_name(onnx_model, kLeftAdd.input[1])):
-            return None 
-    kRightMatMulDyInput = kRightMatMul.input[0] if find_init_by_name(onnx_model, kRightMatMul.input[1]) else kRightMatMul.input[1]
-    kRightTranspose = get_node_by_output(onnx_model, kRightMatMulDyInput)
-    if kRightTranspose is None or kRightTranspose.op_type != 'Transpose':
-        return None
-    kRightAdd = get_node_by_output(onnx_model, kRightTranspose.input[0])
-    if kRightAdd is None or kRightAdd.op_type != 'Add' or \
-        (not find_init_by_name(onnx_model, kRightAdd.input[0]) and not find_init_by_name(onnx_model, kRightAdd.input[1])):
+            if not find_init_by_name(onnx_model, kqDiv.input[0]) and not find_init_by_name(onnx_model, kqDiv.input[1]):
+                kqDiv = get_node_by_output(onnx_model, kqTopMul.input[1])
+            else:
+                kqDivDyInput = kqDiv.input[0] if find_init_by_name(onnx_model, kqDiv.input[1]) else kqDiv.input[1]
+                kqAdd = get_node_by_output(onnx_model, kqDivDyInput)
+                if kqAdd is None or kqAdd.op_type != 'Add' \
+                    or find_init_by_name(onnx_model, kqAdd.input[0]) or find_init_by_name(onnx_model, kqAdd.input[1]):
+                        kqDiv = get_node_by_output(onnx_model, kqTopMul.input[1])
+        if kqDiv is None or kqDiv.op_type not in ['Mul', 'Div']:
             return None
-    kRightAddDyInput = kRightAdd.input[0] if find_init_by_name(onnx_model, kRightAdd.input[1]) else kRightAdd.input[1]
-    kReshape = get_node_by_output(onnx_model, kRightAddDyInput)
-    kLeftAddDyInput = kLeftAdd.input[0] if find_init_by_name(onnx_model, kLeftAdd.input[1]) else kLeftAdd.input[1]
-    if get_node_by_output(onnx_model, kLeftAddDyInput).name != kReshape.name:
-        return None
-    kAdd = get_node_by_output(onnx_model, kReshape.input[0])
-    if kAdd is None or kAdd.op_type != 'Add' or \
-        (not find_init_by_name(onnx_model, kAdd.input[0]) and not find_init_by_name(onnx_model, kAdd.input[1])):
+        if not find_init_by_name(onnx_model, kqDiv.input[0]) and not find_init_by_name(onnx_model, kqDiv.input[1]):
             return None
-    kAddDyInput = kAdd.input[0] if find_init_by_name(onnx_model, kAdd.input[1]) else kAdd.input[1]
-    kMatMul = get_node_by_output(onnx_model, kAddDyInput)
-    if kMatMul is None or kMatMul.op_type != 'MatMul' or \
-        (not find_init_by_name(onnx_model, kMatMul.input[0]) and not find_init_by_name(onnx_model, kMatMul.input[1])):
+        kqDivDyInput = kqDiv.input[0] if find_init_by_name(onnx_model, kqDiv.input[1]) else kqDiv.input[1]
+        kqAdd = get_node_by_output(onnx_model, kqDivDyInput)
+        if kqAdd.op_type != 'Add' or find_init_by_name(onnx_model, kqAdd.input[0]) or find_init_by_name(onnx_model, kqAdd.input[1]):
             return None
-    qTranspose = get_node_by_output(onnx_model, kqMatMul.input[1])
-    if qTranspose is None or qTranspose.op_type != 'Transpose':
-        return None
-    qReshape = get_node_by_output(onnx_model, qTranspose.input[0])
-    if qReshape is None or qReshape.op_type != 'Reshape':
-        return None
-    qAdd = get_node_by_output(onnx_model, qReshape.input[0])
-    if qAdd is None or qAdd.op_type != 'Add' or \
-        (not find_init_by_name(onnx_model, qAdd.input[0]) and not find_init_by_name(onnx_model, qAdd.input[1])):
+        kqMatMul = get_node_by_output(onnx_model, kqAdd.input[0])
+        kRightMatMul = get_node_by_output(onnx_model, kqAdd.input[1])
+        if kqMatMul.op_type != 'MatMul' or kRightMatMul.op_type != 'MatMul':
             return None
-    qAddDyInput = qAdd.input[0] if find_init_by_name(onnx_model, qAdd.input[1]) else qAdd.input[1]
-    qMatMul = get_node_by_output(onnx_model, qAddDyInput)
-    if qMatMul is None or qMatMul.op_type != 'MatMul' or \
-        (not find_init_by_name(onnx_model, qMatMul.input[0]) and not find_init_by_name(onnx_model, qMatMul.input[1])):
+        if find_init_by_name(onnx_model, kqMatMul.input[0]) or find_init_by_name(onnx_model, kqMatMul.input[1]):
+            kqMatMul, kRightMatMul = [kRightMatMul, kqMatMul]
+        kLeftTranspose = get_node_by_output(onnx_model, kqMatMul.input[0])
+        if kLeftTranspose.op_type != 'Transpose':
             return None
-    vTranspose = get_node_by_output(onnx_model, kqvMatMul.input[1])
-    if vTranspose is None or vTranspose.op_type != 'Transpose':
-        return None
-    vReshape = get_node_by_output(onnx_model, vTranspose.input[0])
-    if vReshape is None or vReshape.op_type != 'Reshape':
-        return None
-    vAdd = get_node_by_output(onnx_model, vReshape.input[0])
-    if vAdd is None or vAdd.op_type != 'Add' or \
-        (not find_init_by_name(onnx_model, vAdd.input[0]) and not find_init_by_name(onnx_model, vAdd.input[1])):
+        kLeftAdd = get_node_by_output(onnx_model, kLeftTranspose.input[0])
+        if kLeftAdd is None or kLeftAdd.op_type != 'Add' or \
+            (not find_init_by_name(onnx_model, kLeftAdd.input[0]) and not find_init_by_name(onnx_model, kLeftAdd.input[1])):
+                return None 
+        kRightMatMulDyInput = kRightMatMul.input[0] if find_init_by_name(onnx_model, kRightMatMul.input[1]) else kRightMatMul.input[1]
+        kRightTranspose = get_node_by_output(onnx_model, kRightMatMulDyInput)
+        if kRightTranspose is None or kRightTranspose.op_type != 'Transpose':
             return None
-    vAddDyInput = vAdd.input[0] if find_init_by_name(onnx_model, vAdd.input[1]) else vAdd.input[1]
-    vMatMul = get_node_by_output(onnx_model, vAddDyInput)
-    if vMatMul is None or vMatMul.op_type != 'MatMul' or \
-        (not find_init_by_name(onnx_model, vMatMul.input[0]) and not find_init_by_name(onnx_model, vMatMul.input[1])):
+        kRightAdd = get_node_by_output(onnx_model, kRightTranspose.input[0])
+        if kRightAdd is None or kRightAdd.op_type != 'Add' or \
+            (not find_init_by_name(onnx_model, kRightAdd.input[0]) and not find_init_by_name(onnx_model, kRightAdd.input[1])):
+                return None
+        kRightAddDyInput = kRightAdd.input[0] if find_init_by_name(onnx_model, kRightAdd.input[1]) else kRightAdd.input[1]
+        kReshape = get_node_by_output(onnx_model, kRightAddDyInput)
+        kLeftAddDyInput = kLeftAdd.input[0] if find_init_by_name(onnx_model, kLeftAdd.input[1]) else kLeftAdd.input[1]
+        if get_node_by_output(onnx_model, kLeftAddDyInput).name != kReshape.name:
             return None
-    serial_nodes = {
-        'k_serial': [kReshape, kAdd, kMatMul],
-        'k_right_serial': [kRightMatMul, kRightTranspose, kRightAdd],
-        'k_left_serial': [kLeftTranspose, kLeftAdd],
-        'kq_serial': [kqBotMul, kqSoftmax, kqTopMul, kqDiv, kqAdd, kqMatMul],
-        'q_serial': [qTranspose, qReshape, qAdd, qMatMul],
-        'v_serial': [vTranspose, vReshape, vAdd, vMatMul],
-        'kqv_serial': [kqvMatMul],
-        'fw_serial': [node, FWMatMul, FWReshape, FWTranspose]
-    }
-    return serial_nodes
+        kAdd = get_node_by_output(onnx_model, kReshape.input[0])
+        if kAdd is None or kAdd.op_type != 'Add' or \
+            (not find_init_by_name(onnx_model, kAdd.input[0]) and not find_init_by_name(onnx_model, kAdd.input[1])):
+                return None
+        kAddDyInput = kAdd.input[0] if find_init_by_name(onnx_model, kAdd.input[1]) else kAdd.input[1]
+        kMatMul = get_node_by_output(onnx_model, kAddDyInput)
+        if kMatMul is None or kMatMul.op_type != 'MatMul' or \
+            (not find_init_by_name(onnx_model, kMatMul.input[0]) and not find_init_by_name(onnx_model, kMatMul.input[1])):
+                return None
+        qTranspose = get_node_by_output(onnx_model, kqMatMul.input[1])
+        if qTranspose is None or qTranspose.op_type != 'Transpose':
+            return None
+        qReshape = get_node_by_output(onnx_model, qTranspose.input[0])
+        if qReshape is None or qReshape.op_type != 'Reshape':
+            return None
+        qAdd = get_node_by_output(onnx_model, qReshape.input[0])
+        if qAdd is None or qAdd.op_type != 'Add' or \
+            (not find_init_by_name(onnx_model, qAdd.input[0]) and not find_init_by_name(onnx_model, qAdd.input[1])):
+                return None
+        qAddDyInput = qAdd.input[0] if find_init_by_name(onnx_model, qAdd.input[1]) else qAdd.input[1]
+        qMatMul = get_node_by_output(onnx_model, qAddDyInput)
+        if qMatMul is None or qMatMul.op_type != 'MatMul' or \
+            (not find_init_by_name(onnx_model, qMatMul.input[0]) and not find_init_by_name(onnx_model, qMatMul.input[1])):
+                return None
+        vTranspose = get_node_by_output(onnx_model, kqvMatMul.input[1])
+        if vTranspose is None or vTranspose.op_type != 'Transpose':
+            return None
+        vReshape = get_node_by_output(onnx_model, vTranspose.input[0])
+        if vReshape is None or vReshape.op_type != 'Reshape':
+            return None
+        vAdd = get_node_by_output(onnx_model, vReshape.input[0])
+        if vAdd is None or vAdd.op_type != 'Add' or \
+            (not find_init_by_name(onnx_model, vAdd.input[0]) and not find_init_by_name(onnx_model, vAdd.input[1])):
+                return None
+        vAddDyInput = vAdd.input[0] if find_init_by_name(onnx_model, vAdd.input[1]) else vAdd.input[1]
+        vMatMul = get_node_by_output(onnx_model, vAddDyInput)
+        if vMatMul is None or vMatMul.op_type != 'MatMul' or \
+            (not find_init_by_name(onnx_model, vMatMul.input[0]) and not find_init_by_name(onnx_model, vMatMul.input[1])):
+                return None
+        serial_nodes = {
+            'k_serial': [kReshape, kAdd, kMatMul],
+            'k_right_serial': [kRightMatMul, kRightTranspose, kRightAdd],
+            'k_left_serial': [kLeftTranspose, kLeftAdd],
+            'kq_serial': [kqBotMul, kqSoftmax, kqTopMul, kqDiv, kqAdd, kqMatMul],
+            'q_serial': [qTranspose, qReshape, qAdd, qMatMul],
+            'v_serial': [vTranspose, vReshape, vAdd, vMatMul],
+            'kqv_serial': [kqvMatMul],
+            'fw_serial': [node, FWMatMul, FWReshape, FWTranspose]
+        }
+        return serial_nodes
+    def get_serial_nodes_nowhere(onnx_model, node):
+        if node.op_type != 'Add'or \
+            (not find_init_by_name(onnx_model, node.input[0]) and not find_init_by_name(onnx_model, node.input[1])):
+            return None
+        FWAddDyInput = node.input[1] if find_init_by_name(onnx_model, node.input[0]) else node.input[0]
+        FWMatMul = get_node_by_output(onnx_model, FWAddDyInput)
+        if FWMatMul.op_type != 'MatMul' or \
+            (not find_init_by_name(onnx_model, FWMatMul.input[0]) and not find_init_by_name(onnx_model, FWMatMul.input[1])):
+            return None
+        FWMatMulDyInput = FWMatMul.input[0] if find_init_by_name(onnx_model, FWMatMul.input[1]) else FWMatMul.input[1]
+        FWReshape = get_node_by_output(onnx_model, FWMatMulDyInput)
+        if FWReshape.op_type != 'Reshape':
+            return None
+        FWTranspose = get_node_by_output(onnx_model, FWReshape.input[0])
+        if FWTranspose.op_type != 'Transpose':
+            return None
+        kqvMatMul = get_node_by_output(onnx_model, FWTranspose.input[0])
+        if kqvMatMul.op_type != 'MatMul' \
+            or find_init_by_name(onnx_model, kqvMatMul.input[0]) or find_init_by_name(onnx_model, kqvMatMul.input[1]):
+                return None
+        kqSoftmax = get_node_by_output(onnx_model, kqvMatMul.input[0])
+        if kqSoftmax is None or kqSoftmax.op_type != 'Softmax':
+            kqSoftmax = get_node_by_output(onnx_model, kqvMatMul.input[0])
+        if kqSoftmax is None or kqSoftmax.op_type != 'Softmax':
+            return None
+        kqDiv = get_node_by_output(onnx_model, kqSoftmax.input[0])
+        if kqDiv is None or kqDiv.op_type not in ['Mul', 'Div']:
+            return None
+        if not find_init_by_name(onnx_model, kqDiv.input[0]) and not find_init_by_name(onnx_model, kqDiv.input[1]):
+            return None
+        kqDivDyInput = kqDiv.input[0] if find_init_by_name(onnx_model, kqDiv.input[1]) else kqDiv.input[1]
+        kqAdd = get_node_by_output(onnx_model, kqDivDyInput)
+        if kqAdd.op_type != 'Add' or find_init_by_name(onnx_model, kqAdd.input[0]) or find_init_by_name(onnx_model, kqAdd.input[1]):
+            return None
+        kqMatMul = get_node_by_output(onnx_model, kqAdd.input[0])
+        kRightMatMul = get_node_by_output(onnx_model, kqAdd.input[1])
+        if kqMatMul.op_type != 'MatMul' or kRightMatMul.op_type != 'MatMul':
+            return None
+        if find_init_by_name(onnx_model, kqMatMul.input[0]) or find_init_by_name(onnx_model, kqMatMul.input[1]):
+            kqMatMul, kRightMatMul = [kRightMatMul, kqMatMul]
+        kLeftTranspose = get_node_by_output(onnx_model, kqMatMul.input[0])
+        if kLeftTranspose.op_type != 'Transpose':
+            return None
+        kLeftAdd = get_node_by_output(onnx_model, kLeftTranspose.input[0])
+        if kLeftAdd is None or kLeftAdd.op_type != 'Add' or \
+            (not find_init_by_name(onnx_model, kLeftAdd.input[0]) and not find_init_by_name(onnx_model, kLeftAdd.input[1])):
+                return None 
+        kRightMatMulDyInput = kRightMatMul.input[0] if find_init_by_name(onnx_model, kRightMatMul.input[1]) else kRightMatMul.input[1]
+        kRightTranspose = get_node_by_output(onnx_model, kRightMatMulDyInput)
+        if kRightTranspose is None or kRightTranspose.op_type != 'Transpose':
+            return None
+        kRightAdd = get_node_by_output(onnx_model, kRightTranspose.input[0])
+        if kRightAdd is None or kRightAdd.op_type != 'Add' or \
+            (not find_init_by_name(onnx_model, kRightAdd.input[0]) and not find_init_by_name(onnx_model, kRightAdd.input[1])):
+                return None
+        kRightAddDyInput = kRightAdd.input[0] if find_init_by_name(onnx_model, kRightAdd.input[1]) else kRightAdd.input[1]
+        kReshape = get_node_by_output(onnx_model, kRightAddDyInput)
+        kLeftAddDyInput = kLeftAdd.input[0] if find_init_by_name(onnx_model, kLeftAdd.input[1]) else kLeftAdd.input[1]
+        if get_node_by_output(onnx_model, kLeftAddDyInput).name != kReshape.name:
+            return None
+        kAdd = get_node_by_output(onnx_model, kReshape.input[0])
+        if kAdd is None or kAdd.op_type != 'Add' or \
+            (not find_init_by_name(onnx_model, kAdd.input[0]) and not find_init_by_name(onnx_model, kAdd.input[1])):
+                return None
+        kAddDyInput = kAdd.input[0] if find_init_by_name(onnx_model, kAdd.input[1]) else kAdd.input[1]
+        kMatMul = get_node_by_output(onnx_model, kAddDyInput)
+        if kMatMul is None or kMatMul.op_type != 'MatMul' or \
+            (not find_init_by_name(onnx_model, kMatMul.input[0]) and not find_init_by_name(onnx_model, kMatMul.input[1])):
+                return None
+        qTranspose = get_node_by_output(onnx_model, kqMatMul.input[1])
+        if qTranspose is None or qTranspose.op_type != 'Transpose':
+            return None
+        qReshape = get_node_by_output(onnx_model, qTranspose.input[0])
+        if qReshape is None or qReshape.op_type != 'Reshape':
+            return None
+        qAdd = get_node_by_output(onnx_model, qReshape.input[0])
+        if qAdd is None or qAdd.op_type != 'Add' or \
+            (not find_init_by_name(onnx_model, qAdd.input[0]) and not find_init_by_name(onnx_model, qAdd.input[1])):
+                return None
+        qAddDyInput = qAdd.input[0] if find_init_by_name(onnx_model, qAdd.input[1]) else qAdd.input[1]
+        qMatMul = get_node_by_output(onnx_model, qAddDyInput)
+        if qMatMul is None or qMatMul.op_type != 'MatMul' or \
+            (not find_init_by_name(onnx_model, qMatMul.input[0]) and not find_init_by_name(onnx_model, qMatMul.input[1])):
+                return None
+        vTranspose = get_node_by_output(onnx_model, kqvMatMul.input[1])
+        if vTranspose is None or vTranspose.op_type != 'Transpose':
+            return None
+        vReshape = get_node_by_output(onnx_model, vTranspose.input[0])
+        if vReshape is None or vReshape.op_type != 'Reshape':
+            return None
+        vAdd = get_node_by_output(onnx_model, vReshape.input[0])
+        if vAdd is None or vAdd.op_type != 'Add' or \
+            (not find_init_by_name(onnx_model, vAdd.input[0]) and not find_init_by_name(onnx_model, vAdd.input[1])):
+                return None
+        vAddDyInput = vAdd.input[0] if find_init_by_name(onnx_model, vAdd.input[1]) else vAdd.input[1]
+        vMatMul = get_node_by_output(onnx_model, vAddDyInput)
+        if vMatMul is None or vMatMul.op_type != 'MatMul' or \
+            (not find_init_by_name(onnx_model, vMatMul.input[0]) and not find_init_by_name(onnx_model, vMatMul.input[1])):
+                return None
+        serial_nodes = {
+            'k_serial': [kReshape, kAdd, kMatMul],
+            'k_right_serial': [kRightMatMul, kRightTranspose, kRightAdd],
+            'k_left_serial': [kLeftTranspose, kLeftAdd],
+            'kq_serial': [None, kqSoftmax, None, kqDiv, kqAdd, kqMatMul],
+            'q_serial': [qTranspose, qReshape, qAdd, qMatMul],
+            'v_serial': [vTranspose, vReshape, vAdd, vMatMul],
+            'kqv_serial': [kqvMatMul],
+            'fw_serial': [node, FWMatMul, FWReshape, FWTranspose]
+        }
+        return serial_nodes
+    rslt_serial_nodes = get_serial_nodes_withwhere(onnx_model, node)
+    if rslt_serial_nodes is None:
+        rslt_serial_nodes = get_serial_nodes_nowhere(onnx_model, node)
+    return rslt_serial_nodes
     

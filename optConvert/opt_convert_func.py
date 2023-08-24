@@ -1595,7 +1595,7 @@ def opt_fusionReshapeReshape(onnx_model, node, node_index):
 
 @OnnxDebuggerMeet.opt_convert_wrapper
 def opt_deleteUselessReshapeSlice(onnx_model, node, node_index):
-    if node.op_type in ['Reshape', 'Slice']:
+    def check_useless_node(onnx_model, node):
         inShape = get_shape_by_name(onnx_model, node.input[0])
         outShape = get_shape_by_name(onnx_model, node.output[0])
         if inShape == outShape:
@@ -1609,6 +1609,22 @@ def opt_deleteUselessReshapeSlice(onnx_model, node, node_index):
             return onnx_model, True
         else:        
             return onnx_model, False
+    if node.op_type == 'Reshape':
+        return check_useless_node(onnx_model, node)
+    elif node.op_type == 'Slice':
+        if len(node.input) >= 5:
+            stepsList = get_tensor_from_initializer(onnx_model, node.input[4])
+            negFlag = False
+            for step in stepsList:
+                if step < 0:
+                    negFlag = True
+                    break
+            if not negFlag:
+                return check_useless_node(onnx_model, node)
+            else:
+                return onnx_model, False
+        else:
+            return check_useless_node(onnx_model, node)
     return onnx_model, False
 
 @OnnxDebuggerMeet.opt_convert_wrapper
@@ -2045,22 +2061,56 @@ def opt_convertCalculateTransposeReshapeSoftmax(onnx_model, node, node_index):
         tpOutShape = get_shape_by_name(onnx_model, tpNode.output[0])
         if len(tpOutShape) != 4:
             return onnx_model, False
+        calInShape = get_shape_by_name(onnx_model, calNode.input[0])
         axis = attribute_to_dict(calNode.attribute).get('axis', 1)
         posAxis = len(calInShape) + axis if axis < 0 else axis
         tpPerm = attribute_to_dict(tpNode.attribute).get('perm', list(range(len(tpOutShape))).reverse())
         newAxis = tpPerm.index(posAxis)
         if newAxis != 1:
             return onnx_model, False
+        outNodesList = get_node_by_input(onnx_model, calNode.output)
+        outTpNodesList = [outNode for outNode in outNodesList if outNode.op_type == 'Transpose']
         newCalNode = onnx.helper.make_node(name=calNode.name,
-                                           op_type=calNode.op_type,
-                                           inputs=[tpNode.input[0]],
-                                           outputs=[calNode.output[0]+'_axis1'],
-                                           axis=newAxis)
-        tpNode.input[0] = newCalNode.output[0]
-        onnx_model = delete_value_info_by_name(onnx_model, tpNode.output[0])
-        tpNode.output[0] = calNode.output[0]
-        onnx_model.graph.node.remove(calNode)
-        onnx_model.graph.node.insert(node_index, newCalNode)
+                                op_type=calNode.op_type,
+                                inputs=[tpNode.input[0]],
+                                outputs=[calNode.output[0]+'_axis1'],
+                                axis=newAxis)
+        tpInShape = get_shape_by_name(onnx_model, tpNode.input[0])
+        tpInDtype = get_dtype_by_name(onnx_model, tpNode.input[0])
+        newCalOutValue = onnx.helper.make_tensor_value_info(newCalNode.output[0], tpInDtype, tpInShape)
+        onnx_model.graph.value_info.append(newCalOutValue)
+        if len(outNodesList) != len(outTpNodesList):
+            tpNode.input[0] = newCalNode.output[0]
+            onnx_model = delete_value_info_by_name(onnx_model, tpNode.output[0])
+            tpNode.output[0] = calNode.output[0]
+            onnx_model.graph.node.remove(calNode)
+            onnx_model.graph.node.insert(node_index, newCalNode)
+        else:
+            delNodesList = [tpNode, calNode]
+            insertTpNodesList = []
+            for outTpNode in outTpNodesList:
+                outTpPerm = attribute_to_dict(outTpNode.attribute).get('perm', list(range(len(calInShape))).reverse())
+                newTpPerm = [tpPerm[ip] for ip in outTpPerm]
+                if newTpPerm == list(range(len(calInShape))):
+                    outTpOutNodesList = get_node_by_input(onnx_model, outTpNode.output)
+                    for outTpOutNode in outTpOutNodesList:
+                        for itx, outTpOutNodeInput in enumerate(outTpOutNode.input):
+                            outTpOutNode.input[itx] = newCalNode.output[0] \
+                                if outTpOutNodeInput == outTpNode.output[0] else outTpOutNodeInput
+                else:
+                    newTpNode = onnx.helper.make_node(name=tpNode.name+'_'+outTpNode.name+'_new',
+                                                      op_type='Transpose',
+                                                      inputs=newCalNode.output,
+                                                      outputs=[outTpNode.output[0]],
+                                                      perm=newTpPerm)
+                    insertTpNodesList.append(newTpNode)
+                delNodesList.append(outTpNode)
+            for delNode in delNodesList:
+                onnx_model = delete_value_info_by_name(onnx_model, delNode.output[0])
+                onnx_model.graph.node.remove(delNode)
+            insertTpNodesList.reverse()
+            onnx_model = insert_node_by_list(onnx_model, insertTpNodesList, node_index)
+            onnx_model.graph.node.insert(node_index, newCalNode)
         return onnx_model, True        
     return onnx_model, False
 
@@ -2725,7 +2775,218 @@ def opt_replaceReshapeReduceMean2Conv(onnx_model, node, node_index):
         onnx_model = delete_useless_input_in_initializer(onnx_model)
         return onnx_model, True
     return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_replaceWhere(onnx_model, node, node_index):
+    if node.op_type == 'Where':
+        repInput0 = node.input[1]
+        repInput1 = node.input[2]
+        repInNode0 = get_node_by_output(onnx_model, repInput0)
+        repInNode1 = get_node_by_output(onnx_model, repInput1)
+        if (repInNode0 is not None and repInNode1 is not None) \
+            or (repInNode0 is None and repInNode1 is None):
+            return onnx_model, False
+        repStInput, repDyInput = [node.input[1], node.input[2]] if repInNode0 is None else [node.input[2], node.input[1]]
+        repInArr = get_tensor_from_initializer(onnx_model, repStInput)
+        if repInArr.size != 1 or repInArr not in [0, np.array(-np.inf), np.array(np.inf)]:
+            return onnx_model, False
+        conditionInput = node.input[0]
+        if not find_init_by_name(onnx_model, conditionInput):
+            return onnx_model, False
+        outNodesList = get_node_by_input(onnx_model, node.output)
+        conditionArr = get_tensor_from_initializer(onnx_model, conditionInput)
+        posBoolArr = np.reshape(np.array([True] * conditionArr.size), conditionArr.shape)
+        negBoolArr = np.reshape(np.array([False] * conditionArr.size), conditionArr.shape)
+        if (conditionArr == posBoolArr).all():
+            if repInNode0 is None:
+                return onnx_model, False
+            for outNode in outNodesList:
+                for idx, outNodeInput in enumerate(outNode.input):
+                    outNode.input[idx] == repDyInput if outNodeInput == node.output[0] else outNodeInput
+            onnx_model = delete_value_info_by_name(onnx_model, node.output[0])
+        elif (conditionArr == negBoolArr).all():
+            if repInNode1 is None:
+                return onnx_model, False
+            for outNode in outNodesList:
+                for idx, outNodeInput in enumerate(outNode.input):
+                    outNode.input[idx] = repDyInput if outNodeInput == node.output[0] else outNodeInput
+            onnx_model = delete_value_info_by_name(onnx_model, node.output[0])
+        else:
+            conditionFPArr = conditionArr.astype(np.float32)
+            if repInArr.size == 1:
+                rep_val = 10e9 if repInArr == np.inf else repInArr
+                rep_val = rep_val * -1 if repInArr == -np.inf else rep_val
+                conditionFP1DArr = conditionFPArr.flatten()
+                for idx in range(conditionFP1DArr.size):
+                    conditionFP1DArr[idx] = rep_val if conditionFP1DArr[idx] == 0 else conditionFP1DArr[idx]
+                conditionFPArr = np.reshape(conditionFP1DArr, conditionFPArr.shape)
+                fpWhereTensor = get_initial_by_value(onnx_model, conditionFPArr)
+                if fpWhereTensor is None:
+                    fpWhereTensor = onnx.helper.make_tensor(name=node.input[0]+'_fp32',
+                                                            data_type=TensorProto.FLOAT,
+                                                            dims=conditionFPArr.shape,
+                                                            vals=conditionFPArr.flatten().tolist())
+                    onnx_model.graph.initializer.append(fpWhereTensor)
+                newMulNode = onnx.helper.make_node(name=node.name+'_toMul',
+                                                op_type='Mul',
+                                                inputs=[repDyInput, fpWhereTensor.name],
+                                                outputs=node.output)
+                onnx_model.graph.node.insert(node_index, newMulNode)
+            else:
+                return onnx_model, False
+        onnx_model.graph.node.remove(node)
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionTransposeReshapeTransposeReshapeOrReverse(onnx_model, node, node_index):
+    if check_node_serial_group(onnx_model, node, ['Transpose', 'Reshape', 'Transpose', 'Reshape']):
+        serial_nodes = get_node_serial_group(onnx_model, node, ['Transpose', 'Reshape', 'Transpose', 'Reshape'])
+        topTPNode, topRSNode, botTPNode, botRSNode = serial_nodes
+        topTPInShape = get_shape_by_name(onnx_model, topTPNode.input[0])
+        botRSOutShape = get_shape_by_name(onnx_model, botRSNode.output[0])
+        if topTPInShape != botRSOutShape:
+            return onnx_model, False
+        data_size = int(np.prod(np.array(topTPInShape, dtype=np.int64)))
+        initInArr = np.random.randn(data_size).reshape(tuple(topTPInShape))
+        topPerm = attribute_to_dict(topTPNode.attribute).get('perm', list(range(len(topTPInShape))).reverse())
+        topTPOutSpArr = np.transpose(initInArr, tuple(topPerm))
+        topRSOutShape = get_shape_by_name(onnx_model, topRSNode.output[0])
+        topRSOutSpArr = np.reshape(topTPOutSpArr, tuple(topRSOutShape))
+        botPerm = attribute_to_dict(botTPNode.attribute).get('perm', list(range(len(topRSOutShape))).reverse())
+        botTPOutSpArr = np.transpose(topRSOutSpArr, tuple(botPerm))
+        botRSOutSpArr = np.reshape(botTPOutSpArr, tuple(botRSOutShape))
+        if not (botRSOutSpArr == initInArr).all():
+            return onnx_model, False
+        botRSOutNodesList = get_node_by_input(onnx_model, botRSNode.output)
+        for botRSOutNode in botRSOutNodesList:
+            for idx, botRSOutNodeInput in enumerate(botRSOutNode.input):
+                botRSOutNode.input[idx] = topTPNode.input[0] if botRSOutNodeInput == botRSNode.output[0] else botRSOutNodeInput
+        serial_nodes.reverse()
+        for delNode in serial_nodes:
+            delOutNodesList = get_node_by_input(onnx_model, delNode.output)
+            if not delOutNodesList:
+                onnx_model = delete_value_info_by_name(onnx_model, delNode.output[0])
+                onnx_model.graph.node.remove(delNode)
+            else:
+                break
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    elif check_node_serial_group(onnx_model, node, ['Reshape', 'Transpose', 'Reshape', 'Transpose']):
+        serial_nodes = get_node_serial_group(onnx_model, node, ['Reshape', 'Transpose', 'Reshape', 'Transpose'])
+        topRSNode, topTPNode, botRSNode, botTPNode = serial_nodes
+        topRSInShape = get_shape_by_name(onnx_model, topRSNode.input[0])
+        botTPOutShape = get_shape_by_name(onnx_model, botTPNode.output[0])
+        if topRSInShape != botTPOutShape:
+            return onnx_model, False
+        data_size = int(np.prod(np.array(topRSInShape, dtype=np.int64)))
+        initInArr = np.random.randn(data_size).reshape(tuple(topRSInShape))
+        topRSOutShape = get_shape_by_name(onnx_model, topRSNode.output[0])
+        topRSOutSpArr = np.reshape(initInArr, tuple(topRSOutShape))
+        topPerm = attribute_to_dict(topTPNode.attribute).get('perm', list(range(len(topRSOutShape))).reverse())
+        topTPOutSpArr = np.transpose(topRSOutSpArr, tuple(topPerm))
+        botRSOutShape = get_shape_by_name(onnx_model, botRSNode.output[0])
+        botRSOutSpArr = np.reshape(topTPOutSpArr, tuple(botRSOutShape))
+        botPerm = attribute_to_dict(botTPNode.attribute).get('perm', list(range(len(botRSOutShape))).reverse())
+        botTPOutSpArr = np.transpose(botRSOutSpArr, tuple(botPerm))
+        if not (initInArr == botTPOutSpArr).all():
+            return onnx_model, False
+        botTPOutNodesList = get_node_by_input(onnx_model, botTPNode.output)
+        for botTPOutNode in botTPOutNodesList:
+            for idx, botTPOutNodeInput in enumerate(botTPOutNode.input):
+                botTPOutNode.input[idx] = topRSNode.input[0] if botTPOutNodeInput == botTPNode.output[0] else botTPOutNodeInput
+        serial_nodes.reverse()
+        for delNode in serial_nodes:
+            delOutNodesList = get_node_by_input(onnx_model, delNode.output)
+            if not delOutNodesList:
+                onnx_model = delete_value_info_by_name(onnx_model, delNode.output[0])
+                onnx_model.graph.node.remove(delNode)
+            else:
+                break
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_convertSliceConcatTranspose2ConcatTransposeConv(onnx_model, node, node_index):
+    if check_node_serial_group(onnx_model, node, ['Concat', 'Transpose']):
+        concatNode, tpNode = get_node_serial_group(onnx_model, node, ['Concat', 'Transpose'])
+        newCtInputs = []
+        init_slice_axes = None
+        delNodesList = []
+        for idx, ctInput in enumerate(concatNode.input):
+            pre_node = get_node_by_output(onnx_model, ctInput)
+            if pre_node.op_type != 'Slice' or len(pre_node.input) < 5:
+                return onnx_model, False
+            preInShape = get_shape_by_name(onnx_model, pre_node.input[0])
+            if len(preInShape) != 4:
+                return onnx_model, False
+            stepsList = get_tensor_from_initializer(onnx_model, pre_node.input[4]).tolist()
+            if len(stepsList) != 1 or stepsList[0] != -1:
+                return onnx_model, False
+            axesList = get_tensor_from_initializer(onnx_model, pre_node.input[3]).tolist()
+            if len(axesList) != 1:
+                return onnx_model, False
+            axesPos = axesList[0] + len(preInShape) if axesList[0] < 0 else axesList[0]
+            if init_slice_axes is None:
+                init_slice_axes = axesPos
+            elif init_slice_axes != axesPos:
+                return onnx_model, False
+            startsList = get_tensor_from_initializer(onnx_model, pre_node.input[1]).tolist()
+            if len(startsList) != 1 or startsList[0] not in [-1, preInShape[axesPos]]:
+                return onnx_model, False
+            endsList = get_tensor_from_initializer(onnx_model, pre_node.input[2]).tolist()
+            if len(endsList) != 1 or (endsList[0] != 0 and endsList[0] > preInShape[axesPos] * -1):
+                return onnx_model, False
+            newCtInputs.append(pre_node.input[0])
+            delNodesList.append(pre_node)
+        if init_slice_axes is None:
+            return onnx_model, False
+        newPerm = [0, init_slice_axes, 1, 2 if init_slice_axes == 3 else 3] \
+            if init_slice_axes != 1 else list(range(4))
+        tpInShape = get_shape_by_name(onnx_model, tpNode.input[0])
+        tpPerm = attribute_to_dict(tpNode.attribute).get('perm', list(range(len(tpInShape))).reverse())
+        if newPerm != tpPerm:
+            return onnx_model, False
+        tpOutShape = [tpInShape[index] for index in tpPerm]
+        
+        newCtNode = onnx.helper.make_node(name=concatNode.name,
+                                          op_type='Concat',
+                                          inputs=newCtInputs,
+                                          outputs=concatNode.output,
+                                          axis=attribute_to_dict(concatNode.attribute).get('axis'))
+        
+        conv_attr = {'dilations': [1, 1], 'group': 1, 'kernel_shape': [1, 1], 'pads': [0, 0, 0, 0], 'strides': [1, 1]}
+        wt_arr = np.eye(tpOutShape[1], dtype=np.float32)[::-1].reshape(tpOutShape[1], tpOutShape[1], 1, 1)
+        wt_tensor = get_initial_by_value(onnx_model, wt_arr)
+        if wt_tensor is None:
+            wt_tensor = onnx.helper.make_tensor(name='Slice_'+ concatNode.name +'_wt',
+                                                data_type=NPDTYPE_2_ONNXDTYPE[wt_arr.dtype],
+                                                dims=wt_arr.shape,
+                                                vals=wt_arr.flatten().tolist())
+            onnx_model.graph.initializer.append(wt_tensor)
+        newConvNode = onnx.helper.make_node(name='Slice_' + concatNode.name + '_toConv',
+                                            op_type='Conv',
+                                            inputs=[tpNode.output[0], wt_tensor.name],
+                                            outputs=['Slice_' + concatNode.name + '_toConv_output'],
+                                            **conv_attr)
+        
+        nextNodesList = get_node_by_input(onnx_model, tpNode.output)
+        
+        for nextNode in nextNodesList:
+            for id, nextInput in enumerate(nextNode.input):
+                nextNode.input[id] = newConvNode.output[0] if nextInput == tpNode.output[0] else nextInput
                 
+        tp_id = get_node_id(onnx_model, tpNode)
+        onnx_model.graph.node.insert(tp_id+1, newConvNode)
+        onnx_model.graph.node.remove(concatNode)
+        onnx_model.graph.node.insert(node_index, newCtNode)
+        for delNode in delNodesList:
+            onnx_model = delete_value_info_by_name(onnx_model, delNode.output[0])
+            onnx_model.graph.node.remove(delNode)
         
-        
-        
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    return onnx_model, False
+            

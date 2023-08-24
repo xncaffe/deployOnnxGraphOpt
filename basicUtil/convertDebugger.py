@@ -65,7 +65,9 @@ class OnnxDebuggerMeet(object):
                             break
                 if not restart and do_opt:
                     if OnnxDebuggerMeet.debug_mode == 'release':
+                        #reldebug_path = OnnxDebuggerMeet.save_path[:-5] + func.__name__ + '.onnx'
                         onnx_model = infer_model_shape(onnx_model)
+                        #onnx.save_model(onnx_model, reldebug_path)
                         if OnnxDebuggerMeet.opset_version != 11:
                             check_opt_precision(onnx_model_old, onnx_model, func.__name__) 
                         elif func.__name__ not in OnnxDebuggerMeet.GENERAL_SCREEN_FUNC:
