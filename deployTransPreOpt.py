@@ -9,8 +9,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--input_model", type=str, default="/workspace/nxu/customer/gelingshentong/20230717/encoder_new.onnx", help="input onnx model path")
-    parser.add_argument("-o", "--output_model", type=str, default="/workspace/nxu/customer/gelingshentong/20230717/encoder_new_preopt.onnx", help="output onnx model path")
+    parser.add_argument("-i", "--input_model", type=str, default="./encoder_new.onnx", help="input onnx model path")
+    parser.add_argument("-o", "--output_model", type=str, default="./encoder_new_preopt.onnx", help="output onnx model path")
     parser.add_argument("-v", "--convert_opset", type=int, default=11, help="whether to convert opset version")
     parser.add_argument("--debug", action='store_true', help="run mode is debug or release, defualt release")
     args = parser.parse_args()

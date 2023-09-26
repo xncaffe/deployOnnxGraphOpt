@@ -61,6 +61,7 @@ def model_preprocess(onnx_model):
     logger.info("Start refine onnx name ...")
     onnx_model = refine_tensor_name(onnx_model)
     logger.info("Finish refine onnx name.")
+    onnx_model = infer_model_shape(onnx_model)
     return onnx_model   
 
 class OnnxConvertOptimizer(object):
@@ -129,6 +130,14 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_convertSliceConcatTranspose2ConcatTransposeConv(self.onnx_model)
         self.onnx_model = opt_moveForwardUnsqueeze(self.onnx_model)
         self.onnx_model = opt_moveForwardTranspose(self.onnx_model)
+        self.onnx_model = opt_fusionReshapeTransposeReshapeToReshapeTranspose(self.onnx_model)
+        self.onnx_model = opt_convertW1TransH1WithTransposeSoftmaxTransposeReshape(self.onnx_model)
+        self.onnx_model = opt_fusionTransposeReshapeReduceSumMulReduceSumMulToConv(self.onnx_model)
+        self.onnx_model = opt_fusionTransposeSqueezeMulReduceSumMulToConv(self.onnx_model)
+        self.onnx_model = opt_convertCHReshapeTransposeToCW(self.onnx_model)
+        self.onnx_model = opt_convertSpecial3DimReshapeConcatTo4DimConcat(self.onnx_model)
+        self.onnx_model = opt_deleteSameAxesSliceWithConcat(self.onnx_model)
+        self.onnx_model = opt_convertTransposeConcatToReverse(self.onnx_model)
         
         self.onnx_model = opt_3dimInputReshapeTo4dim(self.onnx_model)
         self.onnx_model = opt_fusionInputTranspose(self.onnx_model)
