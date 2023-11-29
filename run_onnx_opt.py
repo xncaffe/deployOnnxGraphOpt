@@ -14,6 +14,10 @@ from basicUtil.convertDebugger import *
 from optConvert.opt_convert_func import *
 from optConvert.onnxInOutOpt import *
 from optConvert.opt_about_transformer_func import *
+from optConvert.opt_delete_func import *
+from optConvert.opt_replace_func import *
+from optConvert.opt_fusion_func import *
+from optConvert.opt_move_func import *
 
 def convert_dtnamic_batch(onnx_model):
     graph_input = onnx_model.graph.input
@@ -77,6 +81,8 @@ class OnnxConvertOptimizer(object):
         OnnxDebuggerMeet.get_save_path(self.save_path)
         
         
+        self.onnx_model = opt_deleteUselessShapeSliceSqueezeUnsqueezeSlice(self.onnx_model)
+        self.onnx_model = opt_deleteUselessShapeGatherUnsqueezeConcat(self.onnx_model)
         self.onnx_model = opt_deleteGatherInput(self.onnx_model)
         self.onnx_model = opt_mulReplaceWhereBoolInput(self.onnx_model)
         self.onnx_model = opt_deleteUselessReshapeSlice(self.onnx_model)
@@ -84,9 +90,15 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_deleteUnsqueezeCastLessNotUnSqueezeNotSliceSliceForInput(self.onnx_model)
         self.onnx_model = opt_deleteSqueezeCastReduceSumCastForOutput(self.onnx_model)
         self.onnx_model = opt_replaceInputSqueezeCastEqueezeWhereOrNotWhereWithMul(self.onnx_model)
-        if self.onnx_model.opset_import[0].version >= 17:
-            self.onnx_model = opt_fusionSeparatedLayerNormal(self.onnx_model)
+        #if self.onnx_model.opset_import[0].version >= 17:
+        #    self.onnx_model = opt_fusionSeparatedLayerNormal(self.onnx_model)
         self.onnx_model = opt_replaceWhere(self.onnx_model)
+        self.onnx_model = opt_deleteUselessReshapeExpand(self.onnx_model)
+        self.onnx_model = opt_deleteUselessExpand(self.onnx_model)
+        self.onnx_model = opt_replaceGatherGatherTranspose(self.onnx_model)
+        self.onnx_model = opt_replaceReshapeCol2Im(self.onnx_model)
+        self.onnx_model = opt_separateReshapeInstanceNormalReshape(self.onnx_model)
+        self.onnx_model = opt_replaceMultiReshapeScatterNDWithPadConcat(self.onnx_model)
         self.onnx_model = opt_fusionMultiMulDiv(self.onnx_model)
         self.onnx_model = opt_replaceDivByMul(self.onnx_model)
         self.onnx_model = opt_fusionMultiSubReduceMean(self.onnx_model)
@@ -121,6 +133,7 @@ class OnnxConvertOptimizer(object):
         
         self.onnx_model = opt_convertCustomThrConvKQV(self.onnx_model)
         self.onnx_model = opt_replaceReshapeReduceMean2Conv(self.onnx_model)
+        self.onnx_model = opt_fusionSpecialConvPad(self.onnx_model)
         
         self.onnx_model = opt_fusionTransposeReshapeSMishReshapeTranspose(self.onnx_model)
         self.onnx_model = opt_fusionMultiTransposeReshapeXMultiReshapeTranspose(self.onnx_model)
@@ -146,6 +159,10 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_convertMSliceConcatNxMSlice(self.onnx_model)
         self.onnx_model = opt_convertConcatNxSliceAddToNxAdd(self.onnx_model)
         self.onnx_model = opt_convertInputW1ToH1(self.onnx_model)
+        
+        self.onnx_model = opt_moveBackwardCol2ImReshapeTransposeReshape(self.onnx_model)
+        self.onnx_model = opt_moveForwardIm2ColReshapeTransposeReshape(self.onnx_model)
+        self.onnx_model = opt_convertCol2ImMobileViTv2KQVIm2Col(self.onnx_model)
 
         return self.onnx_model         
         

@@ -55,6 +55,7 @@ class OnnxDebuggerMeet(object):
                             do_opt = True
                             logger.info("Graph optimization completed --> "+func.__name__+ ", node_name: " + node.name)
                             if OnnxDebuggerMeet.debug_mode == 'debug':
+                                onnx_model = delete_useless_input_in_initializer(onnx_model)
                                 onnx_model = infer_model_shape(onnx_model)
                                 if OnnxDebuggerMeet.opset_version not in [11, 12]:
                                     check_opt_precision(onnx_model_old, onnx_model, func.__name__) 
@@ -66,6 +67,7 @@ class OnnxDebuggerMeet(object):
                 if not restart and do_opt:
                     if OnnxDebuggerMeet.debug_mode == 'release':
                         #reldebug_path = OnnxDebuggerMeet.save_path[:-5] + func.__name__ + '.onnx'
+                        onnx_model = delete_useless_input_in_initializer(onnx_model)
                         onnx_model = infer_model_shape(onnx_model)
                         #onnx.save_model(onnx_model, reldebug_path)
                         if OnnxDebuggerMeet.opset_version != 11:
@@ -110,3 +112,48 @@ class OnnxDebuggerMeet(object):
             return onnx_model            
         
         return loop_run_func
+    
+    @staticmethod
+    def opt_move_wrapper(func):   
+        @wraps(func)
+        def loop_run_func(*arg, **kwargs):
+            onnx_model = arg[0]
+            onnx_model_old = copy.deepcopy(onnx_model)
+            restart = True
+            do_opt = False
+            try:
+                while(restart):
+                    arg_new = (onnx_model, )
+                    onnx_model, restart = func(*arg_new, **kwargs)
+                    if restart:
+                        do_opt = True
+                        logger.info("Graph optimization completed --> "+func.__name__)
+                        if OnnxDebuggerMeet.debug_mode == 'debug':
+                            onnx_model = delete_useless_input_in_initializer(onnx_model)
+                            onnx_model = infer_model_shape(onnx_model)
+                            if OnnxDebuggerMeet.opset_version not in [11, 12]:
+                                check_opt_precision(onnx_model_old, onnx_model, func.__name__) 
+                            elif func.__name__ not in OnnxDebuggerMeet.GENERAL_SCREEN_FUNC:
+                                check_opt_precision(onnx_model_old, onnx_model, func.__name__)      
+                            onnx_model_old = copy.deepcopy(onnx_model)
+                            print('')
+                if not restart and do_opt:
+                    if OnnxDebuggerMeet.debug_mode == 'release':
+                        #reldebug_path = OnnxDebuggerMeet.save_path[:-5] + func.__name__ + '.onnx'
+                        onnx_model = delete_useless_input_in_initializer(onnx_model)
+                        onnx_model = infer_model_shape(onnx_model)
+                        #onnx.save_model(onnx_model, reldebug_path)
+                        if OnnxDebuggerMeet.opset_version != 11:
+                            check_opt_precision(onnx_model_old, onnx_model, func.__name__) 
+                        elif func.__name__ not in OnnxDebuggerMeet.GENERAL_SCREEN_FUNC:
+                            check_opt_precision(onnx_model_old, onnx_model, func.__name__)
+                        print('')
+            except Exception as e:
+                debug_path = OnnxDebuggerMeet.save_path[:-5] + '-debug.onnx'
+                onnx.save_model(onnx_model, debug_path)
+                logging.info('Save debug model to %s'%debug_path)
+                logging.warning(e)
+                raise ValueError("'{}' converted failed, please check it!".format(func.__name__))
+            return onnx_model            
+        
+        return loop_run_func 

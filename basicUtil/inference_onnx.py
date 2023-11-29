@@ -13,6 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("[OPTPROC]")
 
 def forward_by_onnxruntime(onnx_model):
+    onnx_model = delete_useless_input_in_initializer(onnx_model)
     ort_session = ort.InferenceSession(onnx_model.SerializeToString())
     ort_inputs={}
     for net_input_index in range(len(ort_session.get_inputs())):
@@ -59,6 +60,8 @@ def infer_model_shape(onnx_model):
     
     for node in onnx_model_shape.graph.node:
         for output in node.output:
+            if ort_outs[output] is None:
+                continue
             use_value_info = onnx.helper.make_tensor_value_info(output, 
                                                                 NPDTYPE_2_ONNXDTYPE[ort_outs[output].dtype], 
                                                                 ort_outs[output].shape)

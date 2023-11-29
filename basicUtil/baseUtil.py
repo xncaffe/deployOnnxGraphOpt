@@ -344,7 +344,7 @@ def get_last_node_by_serial(onnx_model, serial_list):
 def get_initial_by_value(onnx_model, src_tensor: np.array):
     for initial in onnx_model.graph.initializer:
         init_tensor = onnx.numpy_helper.to_array(initial)
-        if init_tensor.shape == src_tensor.shape and \
+        if init_tensor.dtype == src_tensor.dtype and init_tensor.shape == src_tensor.shape and \
             np.array((init_tensor == src_tensor), dtype=np.bool8).all():
             return initial
     return None
