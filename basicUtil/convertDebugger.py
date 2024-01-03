@@ -22,7 +22,8 @@ class OnnxDebuggerMeet(object):
         'opt_convertViT_attention',
         'opt_convertCustomThrConvKQV',
         'opt_convertMultiKMultiHeadAttentionKQV',
-        'opt_convertCalculateTransposeReshapeSoftmax'
+        'opt_convertCalculateTransposeReshapeSoftmax',
+        'opt_convertCol2ImPermuteMobileViTv1KQVIm2ColPermute'
     ]
  
     @staticmethod

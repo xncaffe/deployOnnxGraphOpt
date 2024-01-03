@@ -397,4 +397,74 @@ def opt_replaceReshapeCol2Im(onnx_model, node, node_index):
         onnx_model = delete_useless_input_in_initializer(onnx_model)
         return onnx_model, True
     return onnx_model, False
-        
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_replaceGatherToSlice(onnx_model, node, node_index):
+    if node.op_type == 'Gather':
+        input_shape = get_shape_by_name(onnx_model, node.input[0])
+        output_shape = get_shape_by_name(onnx_model, node.output[0])
+        attr_dict = attribute_to_dict(node.attribute)
+        axis = attr_dict.get('axis', 0)          
+        axis_pos = len(input_shape) + axis if axis < 0 else axis
+        if not find_init_by_name(onnx_model, node.input[1]):
+            return onnx_model, False
+        indices_tensor = get_tensor_from_initializer(onnx_model, node.input[1])
+        if indices_tensor.size != 1:
+            return onnx_model, False
+        indice = int(indices_tensor) if indices_tensor.shape == () else indices_tensor.to_list()[0]
+        slice_start_tensor = get_initial_by_value(onnx_model, np.array([indice], dtype=np.int64))
+        if slice_start_tensor is None:
+            slice_start_tensor = onnx.helper.make_tensor(name=node.name+'_param0',
+                                                         data_type=TensorProto.INT64,
+                                                         dims=[1],
+                                                         vals=[indice])
+            onnx_model.graph.initializer.append(slice_start_tensor)
+        slice_end_tensor = get_initial_by_value(onnx_model, np.array([indice+1], dtype=np.int64))
+        if slice_end_tensor is None:
+            slice_end_tensor = onnx.helper.make_tensor(name=node.name+'_param1',
+                                                       data_type=TensorProto.INT64,
+                                                       dims=[1],
+                                                       vals=[indice+1])
+            onnx_model.graph.initializer.append(slice_end_tensor)
+        slice_axes_tensor = get_initial_by_value(onnx_model, np.array([axis_pos], dtype=np.int64))
+        if slice_axes_tensor is None:
+            slice_axes_tensor = onnx.helper.make_tensor(name=node.name+'_param2',
+                                                        data_type=TensorProto.INT64,
+                                                        dims=[1],
+                                                        vals=[axis_pos])
+            onnx_model.graph.initializer.append(slice_axes_tensor)
+        slice_step_tensor = get_initial_by_value(onnx_model, np.array([1], dtype=np.int64))
+        if slice_step_tensor is None:
+            slice_step_tensor = onnx.helper.make_tensor(name=node.name+'_param3',
+                                                        data_type=TensorProto.INT64,
+                                                        dims=[1],
+                                                        vals=[1])
+            onnx_model.graph.initializer.append(slice_step_tensor)
+        slice_inputs = [node.input[0], slice_start_tensor.name, slice_end_tensor.name, 
+                        slice_axes_tensor.name, slice_step_tensor.name]
+        slice_node = onnx.helper.make_node(name=node.name+'_toSlice',
+                                           op_type='Slice',
+                                           inputs=slice_inputs,
+                                           outputs=[node.output[0]+'_init'])
+        new_nodes_list = []
+        if len(output_shape) != len(input_shape):
+            new_shape_tensor = get_initial_by_value(onnx_model, np.array(output_shape, dtype=np.int64))
+            if new_shape_tensor is None:
+                new_shape_tensor = onnx.helper.make_tensor(name=node.name+'_shape',
+                                                           data_type=TensorProto.INT64,
+                                                           dims=[len(output_shape)],
+                                                           vals=output_shape)
+                onnx_model.graph.initializer.append(new_shape_tensor)
+            reshape_node = onnx.helper.make_node(name=node.name+'_reshape',
+                                                 op_type='Reshape',
+                                                 inputs=[slice_node.output[0], new_shape_tensor.name],
+                                                 outputs=[node.output[0]])
+            new_nodes_list.append(reshape_node)
+        else:
+            slice_node.output[0] = node.output[0]
+        new_nodes_list.append(slice_node)
+        onnx_model.graph.node.remove(node)
+        onnx_model = insert_node_by_list(onnx_model, new_nodes_list, node_index)
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    return onnx_model, False

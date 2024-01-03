@@ -289,11 +289,13 @@ def get_shape_by_name(onnx_model, name):
     try:
         for s in tensor.shape:
             dim_list.append(int(s))
-        return dim_list
+        return dim_list  
     except:
         return [1]
 
 def get_node_id(onnx_model, n_node):
+    if n_node is None:
+        return 0
     for id, node in enumerate(onnx_model.graph.node):
         if node.name == n_node.name:
             return id

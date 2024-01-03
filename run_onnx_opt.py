@@ -35,7 +35,7 @@ def refine_tensor_name(onnx_model):
     re_str = r"[\/\\\:\*\?\"\<\>\|]"
     for index, node in enumerate(onnx_model.graph.node):
         if len(node.name) == 0:
-            node.name = node.op_type + "_%d"%index
+            node.name = get_unique_node_tensor_name(onnx_model, node.op_type + "_%d"%index)
         node.name = re.sub(re_str, "_", node.name) if re.search(re_str, node.name) else node.name
         for id, input in enumerate(node.input):
             node.input[id] = re.sub(re_str, "_", input) if re.search(re_str, input) else input
@@ -49,6 +49,19 @@ def refine_tensor_name(onnx_model):
         net_input.name = re.sub(re_str, "_", net_input.name) if re.search(re_str, net_input.name) else net_input.name
     for net_output in onnx_model.graph.output:
         net_output.name = re.sub(re_str, "_", net_output.name) if re.search(re_str, net_output.name) else net_output.name
+    return onnx_model
+
+def check_fix_split_convert(onnx_model):
+    for node in onnx_model.graph.node:
+        if node.op_type != 'Split':
+            continue
+        split_attr_dict = attribute_to_dict(node.attribute)
+        num_outputs = split_attr_dict.get('num_outputs')
+        if num_outputs is not None:
+            continue
+        if len(node.input) <= 1:
+            new_num_outputs_attr = onnx.helper.make_attribute('num_outputs', len(node.output))
+            node.attribute.append(new_num_outputs_attr)
     return onnx_model
 
 def model_preprocess(onnx_model):
@@ -97,6 +110,9 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_deleteUselessExpand(self.onnx_model)
         self.onnx_model = opt_replaceGatherGatherTranspose(self.onnx_model)
         self.onnx_model = opt_replaceReshapeCol2Im(self.onnx_model)
+        self.onnx_model = opt_replaceGatherToSlice(self.onnx_model)
+        self.onnx_model = opt_fusionReshapeTransposeReshapeTransposeWithIm2Col(self.onnx_model)
+        self.onnx_model = opt_fusionTransposeReshapeTransposeReshapeWithCol2Im(self.onnx_model)
         self.onnx_model = opt_separateReshapeInstanceNormalReshape(self.onnx_model)
         self.onnx_model = opt_replaceMultiReshapeScatterNDWithPadConcat(self.onnx_model)
         self.onnx_model = opt_fusionMultiMulDiv(self.onnx_model)
@@ -163,6 +179,8 @@ class OnnxConvertOptimizer(object):
         self.onnx_model = opt_moveBackwardCol2ImReshapeTransposeReshape(self.onnx_model)
         self.onnx_model = opt_moveForwardIm2ColReshapeTransposeReshape(self.onnx_model)
         self.onnx_model = opt_convertCol2ImMobileViTv2KQVIm2Col(self.onnx_model)
-
+        self.onnx_model = opt_moveBackwardReshapeTransposeReshapeWithCol2ImPermute(self.onnx_model)
+        self.onnx_model = opt_moveForwardReshapeTransposeReshapeWithIm2ColPermute(self.onnx_model)
+        self.onnx_model = opt_convertCol2ImPermuteMobileViTv1KQVIm2ColPermute(self.onnx_model)
         return self.onnx_model         
         

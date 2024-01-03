@@ -1,3 +1,4 @@
+from functools import reduce
 from basicUtil.baseUtil import *
 from basicUtil.convertDebugger import *
 
@@ -47,3 +48,141 @@ def opt_fusionSpecialConvPad(onnx_model, node, node_index):
         onnx_model = delete_useless_input_in_initializer(onnx_model)
         return onnx_model, True
     return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionReshapeTransposeReshapeTransposeWithIm2Col(onnx_model, node, node_index): 
+    if check_node_serial_group(onnx_model, node, ['Reshape', 'Transpose', 'Reshape', 'Transpose']):
+        nodes_serial = get_node_serial_group(onnx_model, node, ['Reshape', 'Transpose', 'Reshape', 'Transpose'])
+        top_reshape, top_transpose, mid_reshape, bot_transpose = nodes_serial
+        top_reshape_in_shape = get_shape_by_name(onnx_model, top_reshape.input[0])
+        if len(top_reshape_in_shape) != 4 or top_reshape_in_shape[0] != 1:
+            return onnx_model, False
+        top_reshape_out_shape = get_shape_by_name(onnx_model, top_reshape.output[0])
+        if len(top_reshape_out_shape) < 4 or reduce(lambda x,y:x*y, top_reshape_out_shape[-4:]) != reduce(lambda x,y:x*y, top_reshape_in_shape) \
+            or top_reshape_out_shape[-2]*top_reshape_out_shape[-1] != top_reshape_in_shape[-1] \
+                or top_reshape_out_shape[-4] != top_reshape_in_shape[-2]//top_reshape_out_shape[-3]*top_reshape_in_shape[-3]:
+                    return onnx_model, False
+        top_perm = attribute_to_dict(top_transpose.attribute).get('perm', list(range(len(top_reshape_out_shape))).reverse())
+        top_perm_compare = [top_perm[i] - (len(top_reshape_out_shape) - 4) for i in range(len(top_perm))]
+        if top_perm_compare[-4:] != [0, 2, 1, 3]:
+            return onnx_model, False
+        mid_reshape_in_shape = get_shape_by_name(onnx_model, mid_reshape.input[0])
+        mid_reshape_out_shape = get_shape_by_name(onnx_model, mid_reshape.output[0])
+        if len(mid_reshape_out_shape) < 3 or mid_reshape_in_shape[-2]*mid_reshape_in_shape[-1] != mid_reshape_out_shape[-1] \
+            or mid_reshape_in_shape[-4]//mid_reshape_out_shape[-3]*mid_reshape_in_shape[-3] != mid_reshape_out_shape[-2]:
+                return onnx_model, False
+        bot_perm = attribute_to_dict(bot_transpose.attribute).get('perm', list(range(len(mid_reshape_out_shape))).reverse())
+        bot_perm_compare = [bot_perm[i] - (len(mid_reshape_out_shape) - 3) for i in range(len(bot_perm))]
+        if bot_perm_compare[-3:] != [2, 1, 0]:
+            return onnx_model, False
+
+        new_top_shape = top_reshape_in_shape[:2] + [top_reshape_in_shape[-2]//top_reshape_out_shape[-3]] + top_reshape_out_shape[-3:]
+        new_top_shape_tensor = get_initial_by_value(onnx_model, np.array(new_top_shape, dtype=np.int64))
+        if new_top_shape_tensor is None:
+            new_top_shape_tensor_name = get_unique_node_tensor_name(onnx_model, top_reshape.input[1]+'_new')
+            new_top_shape_tensor = onnx.helper.make_tensor(name=new_top_shape_tensor_name,
+                                                           data_type=TensorProto.INT64,
+                                                           dims=[len(new_top_shape)],
+                                                           vals=new_top_shape)
+            onnx_model.graph.initializer.append(new_top_shape_tensor)
+        new_bot_shape = get_shape_by_name(onnx_model, bot_transpose.output[0])
+        bot_out_name = bot_transpose.output[0]
+        next_nodes_list = get_node_by_input(onnx_model, bot_transpose.output)
+        if len(next_nodes_list) == 1 and next_nodes_list[0].op_type == 'Reshape':
+            new_bot_shape = get_shape_by_name(onnx_model, next_nodes_list[0].output[0])
+            bot_out_name = next_nodes_list[0].output[0]
+            onnx_model.graph.node.remove(next_nodes_list[0])
+        new_bot_shape_tensor = get_initial_by_value(onnx_model, np.array(new_bot_shape, dtype=np.int64))
+        if new_bot_shape_tensor is None:
+            new_bot_shape_tensor_name = get_unique_node_tensor_name(onnx_model, mid_reshape.input[1]+'_new')
+            new_bot_shape_tensor = onnx.helper.make_tensor(name=new_bot_shape_tensor_name,
+                                                           data_type=TensorProto.INT64,
+                                                           dims=[len(new_bot_shape)],
+                                                           vals=new_bot_shape)
+            onnx_model.graph.initializer.append(new_bot_shape_tensor)
+        new_top_reshape = onnx.helper.make_node(name=top_reshape.name,
+                                                op_type='Reshape',
+                                                inputs=[top_reshape.input[0], new_top_shape_tensor.name],
+                                                outputs=[top_reshape.output[0]])
+        new_transpose = onnx.helper.make_node(name=top_transpose.name,
+                                              op_type='Transpose',
+                                              inputs=[new_top_reshape.output[0]],
+                                              outputs=[top_transpose.output[0]],
+                                              perm=[0, 3, 5, 2, 4, 1])
+        new_bot_reshape = onnx.helper.make_node(name=mid_reshape.name,
+                                                op_type='Reshape',
+                                                inputs=[new_transpose.output[0], new_bot_shape_tensor.name],
+                                                outputs=[bot_out_name])
+        for src_node in nodes_serial:
+            if bot_out_name != src_node.output[0]:
+                onnx_model = delete_value_info_by_name(onnx_model, bot_out_name)
+            onnx_model.graph.node.remove(src_node)
+        onnx_model = insert_node_by_list(onnx_model, [new_bot_reshape, new_transpose, new_top_reshape], node_index)
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    return onnx_model, False
+
+@OnnxDebuggerMeet.opt_convert_wrapper
+def opt_fusionTransposeReshapeTransposeReshapeWithCol2Im(onnx_model, node, node_index): 
+    if check_node_serial_group(onnx_model, node, ['Transpose', 'Reshape', 'Transpose', 'Reshape']):
+        nodes_serial = get_node_serial_group(onnx_model, node, ['Transpose', 'Reshape', 'Transpose', 'Reshape'])
+        top_transpose, top_reshape, bot_transpose, bot_reshape = nodes_serial
+        top_transpose_in_shape = get_shape_by_name(onnx_model, top_transpose.input[0])
+        if len(top_transpose_in_shape) != 4 or top_transpose_in_shape[0] != 1:
+            return onnx_model, False
+        top_perm = attribute_to_dict(top_transpose.attribute).get('perm', list(range(len(top_transpose_in_shape))).reverse())
+        if top_perm != [0, 3, 2, 1]:
+            return onnx_model, False
+        top_reshape_in_shape = get_shape_by_name(onnx_model, top_reshape.input[0])
+        top_reshape_out_shape = get_shape_by_name(onnx_model, top_reshape.output[0])
+        if len(top_reshape_out_shape) < 4 or reduce(lambda x,y:x*y, top_reshape_in_shape) != reduce(lambda x,y:x*y, top_reshape_out_shape[-4:]) \
+            or top_reshape_in_shape[-1] != top_reshape_out_shape[-2]*top_reshape_out_shape[-1] \
+                or top_reshape_out_shape[-4]//top_reshape_in_shape[1]*top_reshape_out_shape[-3] != top_reshape_in_shape[-2]:
+                    return onnx_model, False
+        bot_perm = attribute_to_dict(bot_transpose.attribute).get('perm', list(range(len(top_reshape_out_shape))).reverse())
+        bot_perm_compare = [bot_perm[i] - (len(top_reshape_out_shape) - 4) for i in range(len(bot_perm))]
+        if bot_perm_compare[-4:] != [0, 2, 1, 3]:
+            return onnx_model, False
+        bot_reshape_in_shape = get_shape_by_name(onnx_model, bot_reshape.input[0])
+        bot_reshape_out_shape = get_shape_by_name(onnx_model, bot_reshape.output[0])
+        if len(bot_reshape_out_shape) != 4 or bot_reshape_out_shape[0] != 1 \
+            or bot_reshape_out_shape[-1] != bot_reshape_in_shape[-2]*bot_reshape_in_shape[-1] \
+                or bot_reshape_in_shape[-4]//bot_reshape_out_shape[-3]*bot_reshape_in_shape[-3] != bot_reshape_out_shape[-2]:
+                    return onnx_model, False
+        
+        top_in_name = top_transpose.input[0]
+        pre_node = get_node_by_output(onnx_model, top_transpose.input[0])
+        if pre_node.op_type == 'Reshape':
+            top_in_name = pre_node.input[0]
+            pre_next_nodes_list = get_node_by_input(onnx_model, pre_node.output)
+            if len(pre_next_nodes_list) == 1:
+                onnx_model = delete_value_info_by_name(onnx_model, pre_node.output[0])
+                node_index = get_node_id(onnx_model, pre_node)
+                onnx_model.graph.node.remove(pre_node)
+        
+        new_top_shape = [top_transpose_in_shape[0]] + top_reshape_out_shape[-2:] \
+            + [top_transpose_in_shape[-2]//top_reshape_out_shape[-3], top_reshape_out_shape[-3], top_transpose_in_shape[-1]]
+        new_top_shape_tensor = get_initial_by_value(onnx_model, np.array(new_top_shape, dtype=np.int64))
+        if new_top_shape_tensor is None:
+            new_top_shape_tensor = onnx.helper.make_tensor(name=get_unique_node_tensor_name(onnx_model, top_reshape.input[0]+'_new'),
+                                                           data_type=TensorProto.INT64,
+                                                           dims=[len(new_top_shape)],
+                                                           vals=new_top_shape)
+            onnx_model.graph.initializer.append(new_top_shape_tensor)
+        new_top_reshape = onnx.helper.make_node(name=top_reshape.name,
+                                                op_type='Reshape',
+                                                inputs=[top_in_name, new_top_shape_tensor.name],
+                                                outputs=[top_reshape.output[0]])
+        new_transpose = onnx.helper.make_node(name=bot_transpose.name,
+                                              op_type='Transpose',
+                                              inputs=[new_top_reshape.output[0]],
+                                              outputs=[bot_transpose.output[0]],
+                                              perm=[0, 5, 3, 1, 4, 2])
+        for src_node in [top_transpose, top_reshape, bot_transpose]:
+            onnx_model = delete_value_info_by_name(onnx_model, src_node.output[0])
+            onnx_model.graph.node.remove(src_node)
+        onnx_model = insert_node_by_list(onnx_model, [new_transpose, new_top_reshape], node_index)
+        onnx_model = delete_useless_input_in_initializer(onnx_model)
+        return onnx_model, True
+    return onnx_model, False
+        

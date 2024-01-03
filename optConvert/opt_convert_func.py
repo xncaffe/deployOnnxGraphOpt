@@ -1,4 +1,3 @@
-from doctest import FAIL_FAST
 from basicUtil.baseUtil import *
 from basicUtil.convertDebugger import *
 
@@ -2482,8 +2481,12 @@ def opt_fusionReshapeSplitSMishReshape(onnx_model, node, node_index):
         if botRSOutShape != topRSSplitInShape:
             return onnx_model, False
     newSplitAxisAttr = onnx.helper.make_attribute('axis', newSplitAxis)
-    del splitNode.attribute[:]
-    splitNode.attribute.append(newSplitAxisAttr)
+    #del splitNode.attribute[:]
+    for cur_attr in splitNode.attribute:
+        if cur_attr.name == 'axis':
+            splitNode.attribute.remove(cur_attr)
+            break
+    splitNode.attribute.insert(0, newSplitAxisAttr)
     splitNode.input[0] = topRSNode.input[0]
     for botRSNode in botNextRSNodesList:
         botRSNextNodes = get_node_by_input(onnx_model, botRSNode.output)
@@ -3695,6 +3698,8 @@ def opt_deleteSameAxesSliceWithConcat(onnx_model, node, node_index):
             concat_input_nodes_list.append(concat_in_node)
     concat_in_slices_list = [concat_in_node for concat_in_node in concat_input_nodes_list if concat_in_node.op_type == 'Slice']
     same_axis_slices_dict = {}
+    src_slices_input_data = {}
+    src_slices_out_data = {}
     for in_slice_node in concat_in_slices_list:
         if len(in_slice_node.input) < 4:
             continue
@@ -3710,6 +3715,16 @@ def opt_deleteSameAxesSliceWithConcat(onnx_model, node, node_index):
         if dict_key_name not in same_axis_slices_dict:
             same_axis_slices_dict[dict_key_name] = []
         same_axis_slices_dict[dict_key_name].append(in_slice_node)
+        slice_input_shape = get_shape_by_name(onnx_model, in_slice_node.input[0])
+        if in_slice_node.input[0] not in src_slices_input_data:
+            cur_slice_input_data = np.random.random(slice_input_shape)
+            src_slices_input_data[in_slice_node.input[0]] = cur_slice_input_data
+        slice_start_list = get_tensor_from_initializer(onnx_model, in_slice_node.input[1]).tolist()
+        slice_end_list = get_tensor_from_initializer(onnx_model, in_slice_node.input[2]).tolist()
+        slice_start_list = [slice_start_list] if not isinstance(slice_start_list, list) else slice_start_list
+        slice_end_list = [slice_end_list] if not isinstance(slice_end_list, list) else slice_end_list
+        cur_slice_out_data = np.split(src_slices_input_data[in_slice_node.input[0]], [slice_start_list[0], slice_end_list[0]], axis=slice_axis)[1]
+        src_slices_out_data[in_slice_node.output[0]] = cur_slice_out_data    
     if not same_axis_slices_dict:
         return onnx_model, False
     src_concat_inputs_list = list(node.input)
@@ -3739,6 +3754,8 @@ def opt_deleteSameAxesSliceWithConcat(onnx_model, node, node_index):
         if cur_concat_out_shape == same_input_shape:
             new_concat_slice_inputs_list.append(same_tuple[0])
             dst_rm_slices_list += cur_slice_nodes_list
+    if not dst_rm_slices_list:
+        return onnx_model, False
     new_concat_inputs_list = []
     for src_concat_input in src_concat_inputs_list:
         src_concat_in_node = get_node_by_output(onnx_model, src_concat_input)
@@ -3746,6 +3763,14 @@ def opt_deleteSameAxesSliceWithConcat(onnx_model, node, node_index):
             new_concat_inputs_list.append(src_concat_input)
         elif not new_concat_inputs_list or src_concat_in_node.input[0] != new_concat_inputs_list[-1]:
             new_concat_inputs_list.append(src_concat_in_node.input[0])
+    src_concat_out_data = src_slices_out_data[list(src_slices_out_data.keys())[0]]
+    for key_name in list(src_slices_out_data.keys())[1:]:
+        src_concat_out_data = np.concatenate((src_concat_out_data, src_slices_out_data[key_name]), axis=concat_pos_axis)
+    dst_concat_out_data = src_slices_input_data[new_concat_inputs_list[0]]
+    for key_name in new_concat_inputs_list[1:]:
+        dst_concat_out_data = np.concatenate((dst_concat_out_data, src_slices_input_data[key_name]), axis=concat_pos_axis)
+    if dst_concat_out_data.shape != src_concat_out_data.shape or not (dst_concat_out_data == src_concat_out_data).all():
+        return onnx_model, False
     new_concat_node = onnx.helper.make_node(name=node.name,
                                             op_type='Concat',
                                             inputs=new_concat_inputs_list,
@@ -3850,372 +3875,3 @@ def opt_convertTransposeConcatToReverse(onnx_model, node, node_index):
     onnx_model = delete_nodes(onnx_model, concat_in_transpose_nodes_list)
     onnx_model = delete_useless_input_in_initializer(onnx_model)
     return onnx_model, True
-
-@OnnxDebuggerMeet.opt_convert_wrapper
-def opt_convertCol2ImMobileViTv2KQVIm2Col(onnx_model, node, node_index): 
-    if check_node_serial_group(onnx_model, node, ['Reshape', 'Transpose', 'Reshape']):        
-        col2im_serial = get_node_serial_group(onnx_model, node, ['Reshape', 'Transpose', 'Reshape'])
-        col2im_top_in_shape = get_shape_by_name(onnx_model, col2im_serial[0].input[0])
-        col2im_bot_out_shape = get_shape_by_name(onnx_model, col2im_serial[-1].output[0])
-        col2im_top_out_shape = get_shape_by_name(onnx_model, col2im_serial[0].output[0])
-        col2im_bot_in_shape = get_shape_by_name(onnx_model, col2im_serial[-1].input[0])
-        col2im_perm = attribute_to_dict(col2im_serial[1].attribute).get(
-            'perm', list(range(len(col2im_top_out_shape))).reverse())
-        if len(col2im_top_in_shape) != len(col2im_bot_out_shape) != 4 \
-            or col2im_top_in_shape[:2] != col2im_bot_out_shape[:2] \
-                or len(col2im_top_out_shape) != 6 or len(col2im_bot_in_shape) != 6 \
-                    or col2im_top_out_shape[2]*col2im_top_out_shape[3] != col2im_top_in_shape[2] \
-                        or col2im_top_out_shape[4]*col2im_top_out_shape[5] != col2im_top_in_shape[3] \
-                            or col2im_bot_in_shape[2]*col2im_bot_in_shape[3] != col2im_bot_out_shape[2] \
-                                or col2im_bot_in_shape[4]*col2im_bot_in_shape[5] != col2im_bot_out_shape[3] \
-                                    or col2im_perm != [0, 1, 4, 2, 5, 3]:
-                                        return onnx_model, False
-        kqv_mul = get_node_by_output(onnx_model, col2im_serial[0].input[0])
-        if kqv_mul is None or kqv_mul.op_type != 'Mul' or find_init_by_name(onnx_model, kqv_mul.input[0]) \
-            or find_init_by_name(onnx_model, kqv_mul.input[1]):
-                return onnx_model, False
-        reduce_sum = get_node_by_output(onnx_model, kqv_mul.input[0])
-        act_node = get_node_by_output(onnx_model, kqv_mul.input[1])
-        reduce_sum, act_node = [reduce_sum, act_node] \
-            if reduce_sum is not None and reduce_sum.op_type == 'ReduceSum' else [act_node, reduce_sum]
-        if reduce_sum is None or act_node is None or reduce_sum.op_type != 'ReduceSum' \
-            or act_node.op_type not in ['Relu', 'PRelu', 'Clip', 'Sigmoid', 'LRelu', 'Tanh', 'Elu']:
-                return onnx_model, False
-        kq_mul = get_node_by_output(onnx_model, reduce_sum.input[0])
-        if kq_mul is None or kq_mul.op_type != 'Mul' \
-            or find_init_by_name(onnx_model, kq_mul.input[0]) or find_init_by_name(onnx_model, kq_mul.input[1]):
-                return onnx_model, False
-        softmax_node = get_node_by_output(onnx_model, kq_mul.input[0])
-        split_node = get_node_by_output(onnx_model, kq_mul.input[1])
-        if softmax_node is None or split_node is None:
-            return onnx_model, False
-        softmax_node, split_node = [softmax_node, split_node] if softmax_node.op_type == 'Softmax' else [split_node, softmax_node]
-        if softmax_node.op_type != 'Softmax' or split_node.op_type != 'Split':
-            return onnx_model, False
-        softmax_pre_node = get_node_by_output(onnx_model, softmax_node.input[0])
-        if softmax_pre_node.name != split_node.name:
-            return onnx_model, False
-        act_pre_node = get_node_by_output(onnx_model, act_node.input[0])
-        if act_pre_node.name != split_node.name:
-            return onnx_model, False
-        k_input = kq_mul.input[0] if kq_mul.input[1] == softmax_node.output[0] else kq_mul.input[1]
-        q_input = softmax_node.input[0]
-        v_input = act_node.input[0]
-        k_in_shape = get_shape_by_name(onnx_model, k_input)
-        q_in_shape = get_shape_by_name(onnx_model, q_input)
-        v_in_shape = get_shape_by_name(onnx_model, v_input)
-        split_in_shape = get_shape_by_name(onnx_model, split_node.input[0])
-        if len(split_in_shape) != 4 or split_in_shape[-2:] != col2im_top_in_shape[-2:]:
-            return onnx_model, False
-        split_attribute = attribute_to_dict(split_node.attribute)
-        split_axis = split_attribute.get('axis', 1)
-        split_pos_axis = len(split_in_shape) + split_axis if split_axis < 0 else split_axis
-        if onnx_model.opset_import[0].version <= 12:
-            split_list = split_attribute.get('split')
-        else:
-            split_list = get_tensor_from_initializer(onnx_model, split_node.input[1]).tolist()
-        if split_pos_axis != 1 or not isinstance(split_list, list) or len(split_list) != 3 \
-            or split_list != [q_in_shape[1], k_in_shape[1], v_in_shape[1]]:
-                return onnx_model, False
-        softmax_axis = attribute_to_dict(softmax_node.attribute).get('axis', 1)
-        softmax_pos_axis = len(q_in_shape) + softmax_axis if softmax_axis < 0 else softmax_axis
-        if softmax_pos_axis != 3:
-            return onnx_model, False
-        reducesum_attribute = attribute_to_dict(reduce_sum.attribute)
-        if onnx_model.opset_import[0].version <= 12:
-            reducesum_axes = reducesum_attribute.get('axes')
-        else:
-            reducesum_axes = get_tensor_from_initializer(onnx_model, reduce_sum.input[1]).tolist()
-        reducesum_axes_list = [reducesum_axes] if not isinstance(reducesum_axes, list) else reducesum_axes
-        if len(reducesum_axes_list) > 1:
-            return onnx_model, False
-        reducesum_axis = reducesum_axes_list[0]
-        reducesum_pos_axis = len(k_in_shape) + reducesum_axis if reducesum_axis < 0 else reducesum_axis
-        if reducesum_pos_axis != len(k_in_shape) - 1:
-            return onnx_model, False
-        reducesum_keepdims = reducesum_attribute.get('keepdims', 1)
-        if reducesum_keepdims != 1:
-            return onnx_model, False
-        im2col_bot_reshape = get_node_by_output(onnx_model, split_node.input[0])
-        if im2col_bot_reshape is None or im2col_bot_reshape.op_type != 'Reshape':
-            return onnx_model, False
-        im2col_transpose = get_node_by_output(onnx_model, im2col_bot_reshape.input[0])
-        if im2col_transpose is None or im2col_transpose.op_type != 'Transpose':
-            return onnx_model, False
-        im2col_top_reshape = get_node_by_output(onnx_model, im2col_transpose.input[0])
-        if im2col_top_reshape is None or im2col_top_reshape.op_type != 'Reshape':
-            return onnx_model, False
-        im2col_top_in_shape = get_shape_by_name(onnx_model, im2col_top_reshape.input[0])
-        im2col_top_out_shape = get_shape_by_name(onnx_model, im2col_top_reshape.output[0])
-        im2col_bot_in_shape = get_shape_by_name(onnx_model, im2col_bot_reshape.input[0])
-        im2col_bot_out_shape = get_shape_by_name(onnx_model, im2col_bot_reshape.output[0])
-        im2col_perm = attribute_to_dict(im2col_transpose.attribute).get('perm', list(range(len(im2col_top_out_shape))).reverse())
-        if len(im2col_top_in_shape) != len(im2col_bot_out_shape) or im2col_top_in_shape[:2] != im2col_bot_out_shape[:2] \
-            or im2col_top_in_shape[2] != im2col_top_out_shape[2]*im2col_top_out_shape[3] \
-                or im2col_top_in_shape[3] != im2col_top_out_shape[4]*im2col_top_out_shape[5] \
-                    or im2col_bot_in_shape[2]*im2col_bot_in_shape[3] != im2col_bot_out_shape[2] \
-                        or im2col_bot_in_shape[4]*im2col_bot_in_shape[5] != im2col_bot_out_shape[3] \
-                            or im2col_perm != [0, 1, 3, 5, 2, 4]:
-                                return onnx_model, False
-        
-        new_top_shape = [im2col_top_in_shape[0], im2col_top_in_shape[1], 1, im2col_top_in_shape[-2]*im2col_top_in_shape[-1]]
-        new_top_shape_tensor = get_initial_by_value(onnx_model, np.array(new_top_shape, dtype=np.int64))
-        if new_top_shape_tensor is None:
-            new_top_shape_tensor_name = im2col_bot_reshape.input[1] \
-                if not find_other_node_by_input(onnx_model, im2col_bot_reshape, im2col_bot_reshape.input[1]) \
-                    else get_unique_node_tensor_name(onnx_model, im2col_bot_reshape.input[1])
-            new_top_shape_tensor = onnx.helper.make_tensor(name=new_top_shape_tensor_name,
-                                                           data_type=TensorProto.INT64,
-                                                           dims=[len(new_top_shape)],
-                                                           vals=new_top_shape)
-            onnx_model.graph.initializer.append(new_top_shape_tensor)
-        new_top_reshape = onnx.helper.make_node(name=im2col_bot_reshape.name,
-                                                op_type='Reshape',
-                                                inputs=[im2col_top_reshape.input[0], new_top_shape_tensor.name],
-                                                outputs=[im2col_top_reshape.output[0]])
-        
-        new_top_transpose = onnx.helper.make_node(name=im2col_transpose.name,
-                                            op_type='Transpose',
-                                            inputs=[new_top_reshape.output[0]],
-                                            outputs=[im2col_transpose.output[0]],
-                                            perm=[0, 3, 2, 1])
-        
-        top_conv_index = np.array(list(range(new_top_shape[-1])), np.int64)
-        top_conv_index = np.reshape(top_conv_index, tuple(im2col_top_out_shape[-4:]))
-        top_conv_index = np.transpose(top_conv_index, (1, 3, 0, 2))
-        top_conv_index = top_conv_index.flatten().tolist()
-        top_conv_wt = np.zeros((new_top_shape[-1], new_top_shape[-1]), dtype=np.float32)
-        for wt_h in range(top_conv_wt.shape[1]):
-            top_conv_wt[wt_h][top_conv_index[wt_h]] = 1
-        top_conv_wt = np.reshape(top_conv_wt, (new_top_shape[-1], new_top_shape[-1], 1, 1))
-        top_conv_wt_tensor = get_initial_by_value(onnx_model, top_conv_wt)
-        if top_conv_wt_tensor is None:
-            top_conv_wt_tensor = onnx.helper.make_tensor(name=im2col_transpose.name+'_im2colConv_wt',
-                                                         data_type=NPDTYPE_2_ONNXDTYPE[top_conv_wt.dtype],
-                                                         dims=top_conv_wt.shape,
-                                                         vals=top_conv_wt.flatten().tolist())
-            onnx_model.graph.initializer.append(top_conv_wt_tensor)
-        conv_attr = {'dilations': [1, 1], 'group': 1, 'kernel_shape': [1, 1], 'pads': [0, 0, 0, 0], 'strides': [1, 1]}
-        top_conv_node = onnx.helper.make_node(name=im2col_transpose.name+'_im2colConv',
-                                              op_type='Conv',
-                                              inputs=[new_top_transpose.output[0], top_conv_wt_tensor.name],
-                                              outputs=[new_top_reshape.output[0]+'_im2col'],
-                                              **conv_attr)
-        slice_param_id = 0
-        new_q_slice_start_tensor = get_initial_by_value(onnx_model, np.array([0], dtype=np.int64))
-        if new_q_slice_start_tensor is None:
-            new_q_slice_start_tensor = onnx.helper.make_tensor(name=split_node.name+'_param_%d'%slice_param_id,
-                                                               data_type=TensorProto.INT64,
-                                                               dims=[1],
-                                                               vals=[0])
-            onnx_model.graph.initializer.append(new_q_slice_start_tensor)
-            slice_param_id += 1
-        new_q_slice_ends_tensor = get_initial_by_value(onnx_model, np.array([q_in_shape[1]], dtype=np.int64))
-        if new_q_slice_ends_tensor is None:
-            new_q_slice_ends_tensor = onnx.helper.make_tensor(name=split_node.name+'_param_%d'%slice_param_id,
-                                                              data_type=TensorProto.INT64,
-                                                              dims=[1],
-                                                              vals=[q_in_shape[1]])
-            onnx_model.graph.initializer.append(new_q_slice_ends_tensor)
-            slice_param_id += 1
-        new_k_slice_ends_tensor = get_initial_by_value(onnx_model, np.array([k_in_shape[1]+q_in_shape[1]], dtype=np.int64))
-        if new_k_slice_ends_tensor is None:
-            new_k_slice_ends_tensor = onnx.helper.make_tensor(name=split_node.name+'_param_%d'%slice_param_id,
-                                                              data_type=TensorProto.INT64,
-                                                              dims=[1],
-                                                              vals=[k_in_shape[1]+q_in_shape[1]])
-            onnx_model.graph.initializer.append(new_k_slice_ends_tensor)
-            slice_param_id += 1
-        new_v_slice_ends_tensor = get_initial_by_value(onnx_model, np.array([split_in_shape[1]], dtype=np.int64))
-        if new_v_slice_ends_tensor is None:
-            new_v_slice_ends_tensor = onnx.helper.make_tensor(name=split_node.name+'_param_%d'%slice_param_id,
-                                                              data_type=TensorProto.INT64,
-                                                              dims=[1],
-                                                              vals=[split_in_shape[1]])
-            onnx_model.graph.initializer.append(new_v_slice_ends_tensor)
-            slice_param_id += 1
-        new_slice_axes_tensor = get_initial_by_value(onnx_model, np.array([3], dtype=np.int64))
-        if new_slice_axes_tensor is None:
-            new_slice_axes_tensor = onnx.helper.make_tensor(name=split_node.name+'_param_%d'%slice_param_id,
-                                                            data_type=TensorProto.INT64,
-                                                            dims=[1],
-                                                            vals=[3])
-            onnx_model.graph.initializer.append(new_slice_axes_tensor)
-            slice_param_id += 1
-        new_slice_step_tensor = get_initial_by_value(onnx_model, np.array([1], dtype=np.int64))
-        if new_slice_step_tensor is None:
-            new_slice_step_tensor = onnx.helper.make_tensor(name=split_node.name+'_param_%d'%slice_param_id,
-                                                            data_type=TensorProto.INT64,
-                                                            dims=[1],
-                                                            vals=[1])
-            onnx_model.graph.initializer.append(new_slice_step_tensor)
-            slice_param_id += 1
-        new_q_slice_inputs = [top_conv_node.output[0], new_q_slice_start_tensor.name, 
-                              new_q_slice_ends_tensor.name, new_slice_axes_tensor.name, new_slice_step_tensor.name]
-        new_q_slice_node = onnx.helper.make_node(name=split_node.name+'_slice_q',
-                                                 op_type='Slice',
-                                                 inputs=new_q_slice_inputs,
-                                                 outputs=[split_node.output[0]])
-        new_k_slice_inputs = [top_conv_node.output[0], new_q_slice_ends_tensor.name,
-                              new_k_slice_ends_tensor.name, new_slice_axes_tensor.name, new_slice_step_tensor.name]
-        new_k_slice_node = onnx.helper.make_node(name=split_node.name+'_slice_k',
-                                                 op_type='Slice',
-                                                 inputs=new_k_slice_inputs,
-                                                 outputs=[split_node.output[1]])
-        new_v_slice_inputs = [top_conv_node.output[0], new_k_slice_ends_tensor.name,
-                              new_v_slice_ends_tensor.name, new_slice_axes_tensor.name, new_slice_step_tensor.name]
-        new_v_slice_node = onnx.helper.make_node(name=split_node.name+'_slice_v',
-                                                 op_type='Slice',
-                                                 inputs=new_v_slice_inputs,
-                                                 outputs=[split_node.output[2]])
-        
-        new_channel_axes_slice_tensor = get_initial_by_value(onnx_model, np.array([1], dtype=np.int64))
-        if new_channel_axes_slice_tensor is None:
-            new_channel_axes_slice_tensor = onnx.helper.make_tensor(name=split_node.name+'_param_%d'%slice_param_id,
-                                                              data_type=TensorProto.INT64,
-                                                              dims=[1],
-                                                              vals=[1])
-            onnx_model.gragh.initializer.append(new_channel_axes_slice_tensor)
-            slice_param_id += 1
-        
-        new_act_node = onnx.helper.make_node(name=act_node.name,
-                                        op_type=act_node.op_type,
-                                        inputs=[new_v_slice_node.output[0]],
-                                        outputs=[act_node.output[0]])
-        
-        concat_inputs = []
-        kqv_nodes_serial = []
-        new_channel_slice_start_tensor = new_q_slice_start_tensor
-        for c_idx in range(im2col_bot_out_shape[-2]):
-            new_channel_slice_ends_tensor = get_initial_by_value(
-                onnx_model, np.array([(c_idx+1)*im2col_bot_out_shape[-1]], dtype=np.int64))
-            if new_channel_slice_ends_tensor is None:
-                new_channel_slice_ends_tensor = onnx.helper.make_tensor(name=split_node.name+'_param_%d'%slice_param_id,
-                                                                          data_type=TensorProto.INT64,
-                                                                          dims=[1],
-                                                                          vals=[(c_idx+1)*im2col_bot_out_shape[-1]])
-                onnx_model.graph.initializer.append(new_channel_slice_ends_tensor)
-                slice_param_id += 1
-            new_channel_q_slice_inputs = [new_q_slice_node.output[0], new_channel_slice_start_tensor.name, 
-                            new_channel_slice_ends_tensor.name, new_channel_axes_slice_tensor.name, new_slice_step_tensor.name]
-            new_q_channel_slice_node = onnx.helper.make_node(name=softmax_node.input[0]+'_slice_%d'%c_idx,
-                                                             op_type='Slice',
-                                                             inputs=new_channel_q_slice_inputs,
-                                                             outputs=[softmax_node.input[0]+'_c%d'%c_idx])
-            kqv_nodes_serial.append(new_q_channel_slice_node)
-            
-            new_q_softmax = onnx.helper.make_node(name=softmax_node.name+'_%d'%c_idx,
-                                                  op_type='Softmax',
-                                                  inputs=[new_q_channel_slice_node.output[0]],
-                                                  outputs=[softmax_node.output[0]+'_%d'%c_idx],
-                                                  axis=1)
-            kqv_nodes_serial.append(new_q_softmax)
-            
-            new_channel_k_slice_inputs = [new_k_slice_node.output[0], new_channel_slice_start_tensor.name,
-                            new_channel_slice_ends_tensor.name, new_channel_axes_slice_tensor.name, new_slice_step_tensor.name]
-            new_k_channel_slice_node = onnx.helper.make_node(name=kq_mul.name+'_k_input_slice_%d'%c_idx,
-                                                             op_type='Slice',
-                                                             inputs=new_channel_k_slice_inputs,
-                                                             outputs=[split_node.output[1]+'_c%d'%c_idx])
-            kqv_nodes_serial.append(new_k_channel_slice_node)
-            
-            new_kq_mul = onnx.helper.make_node(name=kq_mul.name+'_%d'%c_idx,
-                                               op_type='Mul',
-                                               inputs=[new_k_channel_slice_node.output[0], new_q_softmax.output[0]],
-                                               outputs=[kq_mul.output[0]+'_%d'%c_idx])
-            kqv_nodes_serial.append(new_kq_mul)
-            
-            reducesum_conv_wt = np.ones((1, im2col_bot_out_shape[-1], 1, 1), dtype=np.float32)
-            reducesum_conv_wt_tensor = get_initial_by_value(onnx_model, reducesum_conv_wt)
-            if reducesum_conv_wt_tensor is None:
-                reducesum_conv_wt_tensor = onnx.helper.make_tensor(name=reduce_sum.name+'_conv_wt',
-                                                                   data_type=NPDTYPE_2_ONNXDTYPE[reducesum_conv_wt.dtype],
-                                                                   dims=reducesum_conv_wt.shape,
-                                                                   vals=reducesum_conv_wt.flatten().tolist())
-                onnx_model.graph.initializer.append(reducesum_conv_wt_tensor)
-            reducesum_conv = onnx.helper.make_node(name=reduce_sum.name+'_toConv_%d'%c_idx,
-                                                   op_type='Conv',
-                                                   inputs=[new_kq_mul.output[0], reducesum_conv_wt_tensor.name],
-                                                   outputs=[reduce_sum.output[0]+'_%d'%c_idx],
-                                                   **conv_attr)
-            kqv_nodes_serial.append(reducesum_conv)
-            
-            new_channel_v_slice_inputs = [new_act_node.output[0], new_channel_slice_start_tensor.name,
-                            new_channel_slice_ends_tensor.name, new_channel_axes_slice_tensor.name, new_slice_step_tensor.name]
-            new_v_channel_slice_node = onnx.helper.make_node(name=kqv_mul.name+'_v_input_slice_%d'%c_idx,
-                                                             op_type='Slice',
-                                                             inputs=new_channel_v_slice_inputs,
-                                                             outputs=[act_node.output[0]+'_c%d'%c_idx])
-            kqv_nodes_serial.append(new_v_channel_slice_node)
-            
-            new_kqv_mul = onnx.helper.make_node(name=kqv_mul.name+'_%d'%c_idx,
-                                                 op_type='Mul',
-                                                 inputs=[reducesum_conv.output[0], new_v_channel_slice_node.output[0]],
-                                                 outputs=[kqv_mul.output[0]+'_%d'%c_idx])
-            kqv_nodes_serial.append(new_kqv_mul)
-            
-            concat_inputs.append(new_kqv_mul.output[0])
-            new_channel_slice_start_tensor = new_channel_slice_ends_tensor
-            
-        new_concat_node = onnx.helper.make_node(name=kqv_mul.name+'_concat',
-                                                op_type='Concat',
-                                                inputs=concat_inputs,
-                                                outputs=[kqv_mul.output[0]],
-                                                axis=1)
-
-        new_bot_conv_wt = np.zeros((new_top_shape[-1], new_top_shape[-1]), dtype=np.float32)
-        bot_conv_index = np.array(list(range(new_top_shape[-1])), np.int64)
-        bot_conv_index = np.reshape(bot_conv_index, tuple(col2im_top_out_shape[-4:]))
-        bot_conv_index = np.transpose(bot_conv_index, (2, 0, 3, 1))
-        bot_conv_index = bot_conv_index.flatten().tolist() 
-        for wt_h in range(new_top_shape[-1]):
-            new_bot_conv_wt[wt_h][bot_conv_index[wt_h]] = 1
-        new_bot_conv_wt = np.reshape(new_bot_conv_wt, (new_top_shape[-1], new_top_shape[-1], 1, 1))
-        new_bot_conv_wt_tensor = get_initial_by_value(onnx_model, new_bot_conv_wt)
-        if new_bot_conv_wt_tensor is None:
-            new_bot_conv_wt_tensor = onnx.helper.make_tensor(name=col2im_serial[1].name+'_col2im_conv_wt',
-                                                             data_type=NPDTYPE_2_ONNXDTYPE[new_bot_conv_wt.dtype],
-                                                             dims=new_bot_conv_wt.shape,
-                                                             vals=new_bot_conv_wt.flatten().tolist())
-            onnx_model.graph.initializer.append(new_bot_conv_wt_tensor)
-        bot_conv_node = onnx.helper.make_node(name=col2im_serial[1].name+'_col2im_conv',
-                                              op_type='Conv',
-                                              inputs=[new_concat_node.output[0], new_bot_conv_wt_tensor.name],
-                                              outputs=[col2im_serial[1].output[0]+'_col2im'],
-                                              **conv_attr)
-        new_bot_transpose = onnx.helper.make_node(name=col2im_serial[1].name,
-                                              op_type='Transpose',
-                                              inputs=[bot_conv_node.output[0]],
-                                              outputs=[col2im_serial[1].output[0]],
-                                              perm=[0, 3, 2, 1])
-        bot_out_shape_tensor = get_initial_by_value(onnx_model, np.array(col2im_bot_out_shape, dtype=np.int64))
-        if bot_out_shape_tensor is None:
-            bot_out_shape_tensor_name = col2im_serial[-1].input[0] \
-                if not find_other_node_by_input(onnx_model, col2im_serial[-1], col2im_serial[-1].input[0]) \
-                    else get_unique_node_tensor_name(onnx_model, col2im_serial[-1].input[0])
-            bot_out_shape_tensor = onnx.helper.make_tensor(name=bot_out_shape_tensor_name,
-                                                           data_type=TensorProto.INT64,
-                                                           dims=[len(col2im_bot_out_shape)],
-                                                           vals=col2im_bot_out_shape)
-            onnx_model.graph.initializer.append(bot_out_shape_tensor)
-        new_bot_reshape = onnx.helper.make_node(name=col2im_serial[-1].name,
-                                                op_type='Reshape',
-                                                inputs=[new_bot_transpose.output[0], bot_out_shape_tensor.name],
-                                                outputs=[col2im_serial[-1].output[0]])
-        
-        im2col_top_reshape_id = get_node_id(onnx_model, im2col_top_reshape)
-        
-        del_nodes_list = [im2col_bot_reshape, im2col_transpose, im2col_top_reshape, 
-                          split_node, softmax_node, kq_mul, reduce_sum, kqv_mul, act_node] + col2im_serial
-        for cur_node in del_nodes_list:
-            for cur_output in cur_node.output:
-                onnx_model = delete_value_info_by_name(onnx_model, cur_output)
-            onnx_model.graph.node.remove(cur_node)
-        
-        new_nodes_list = [new_top_reshape, new_top_transpose, top_conv_node, new_q_slice_node, new_k_slice_node, new_v_slice_node, new_act_node] \
-            + kqv_nodes_serial + [new_concat_node, bot_conv_node, new_bot_transpose, new_bot_reshape]
-        new_nodes_list.reverse()
-        onnx_model = insert_node_by_list(onnx_model, new_nodes_list, im2col_top_reshape_id)
-        onnx_model = delete_useless_input_in_initializer(onnx_model)
-        return onnx_model, True
-    return onnx_model, False

@@ -96,7 +96,65 @@ def check_Continue3dimResidual(onnx_model, addNode, reshapeNode):
             onnx_model = check_Continue3dimResidual(onnx_model, addAfterReshapeOutNode, newAddAfterReshapeNode)
     return onnx_model
 
-def get_layernormal_node_dict(onnx_model, addNode):
+def get_layernormal_node_dict(onnx_model, iniNode):
+    def get_find_case_three_without_add(onnx_model, iniNode):
+        if iniNode.op_type != 'Div':
+            return None
+        if iniNode is None or len(iniNode.input) != 2 or \
+            find_init_by_name(onnx_model, iniNode.input[0]) or find_init_by_name(onnx_model, iniNode.input[1]):
+                return None
+        leftSubNode = get_node_by_output(onnx_model, iniNode.input[0])
+        if leftSubNode.op_type != 'Sub':
+            return None
+        rightAddNode = get_node_by_output(onnx_model, iniNode.input[1])
+        if rightAddNode.op_type != 'Add':
+            return None
+        rightAddDyInput, rightAddStInput = [rightAddNode.input[0], rightAddNode.input[1]] \
+            if find_init_by_name(onnx_model, rightAddNode.input[1]) else [rightAddNode.input[1], rightAddNode.input[0]]
+        if not find_init_by_name(onnx_model, rightAddStInput):
+            return None
+        rightSqrtNode = get_node_by_output(onnx_model, rightAddDyInput)
+        if rightSqrtNode.op_type != 'Sqrt':
+            return None
+        rightSecMulNode = get_node_by_output(onnx_model, rightSqrtNode.input[0])
+        if rightSecMulNode.op_type != "Mul":
+            return None
+        staticRightSecMulInput, dynamicRightSecMulInput = [rightSecMulNode.input[1], rightSecMulNode.input[0]] \
+            if find_init_by_name(onnx_model, rightSecMulNode.input[1]) else [rightSecMulNode.input[0], rightSecMulNode.input[1]]
+        if not find_init_by_name(onnx_model, staticRightSecMulInput):
+            return None
+        rightRMNode = get_node_by_output(onnx_model, dynamicRightSecMulInput)
+        if rightRMNode.op_type != 'ReduceMean':
+            return None
+        rightTopMulNode = get_node_by_output(onnx_model, rightRMNode.input[0])
+        if rightTopMulNode.op_type == "Mul":
+            if rightTopMulNode.input[0] != rightTopMulNode.input[1]:
+                return None
+        elif rightTopMulNode.op_type == "Pow":
+            powNumArr = get_tensor_from_initializer(onnx_model, rightTopMulNode.input[1])
+            if powNumArr.size != 1:
+                return None
+            elif powNumArr[0] != 2:
+                return None
+        rightSubNode = get_node_by_output(onnx_model, rightTopMulNode.input[0])
+        if rightSubNode != leftSubNode:
+            return None
+        topRMNode = get_node_by_output(onnx_model, leftSubNode.input[1])
+        if topRMNode is None or topRMNode.op_type != 'ReduceMean':
+            return None
+        if topRMNode.input[0] != leftSubNode.input[0]:
+            return None
+        reNodesDict = {'input': get_node_by_output(onnx_model, topRMNode.input[0]),
+                    'topReduceMean': topRMNode,
+                    'sub': leftSubNode,
+                    'rightTopMul': rightTopMulNode,
+                    'rightReduceMean': rightRMNode,
+                    'rightSecMul': rightSecMulNode,
+                    'Sqrt': rightSqrtNode,
+                    'rightAdd': rightAddNode,
+                    'div': iniNode,
+                    'output': iniNode}
+        return reNodesDict
     def get_find_case_one(onnx_model, addNode):
         if addNode.op_type != "Add":
             return None
@@ -225,9 +283,16 @@ def get_layernormal_node_dict(onnx_model, addNode):
             'pow': powNode,
             'output': addNode}
         return reNodesDict
-    reDicts = get_find_case_one(onnx_model, addNode)
-    if reDicts is None:
-        reDicts = get_find_case_two(onnx_model, addNode)
+    funcs = [
+        get_find_case_one,
+        get_find_case_two,
+        get_find_case_three_without_add
+    ]
+    reDicts = None
+    for func_name in funcs:
+        reDicts = func_name(onnx_model, iniNode)
+        if reDicts is not None:
+            return reDicts
     return reDicts
         
 def get_vit_kqv_block_nodes(onnx_model, node):
